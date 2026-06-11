@@ -1,5 +1,6 @@
 import { pool } from '../config/database.js';
 import { AppError } from '../utils/AppError.js';
+import { sqlLimit, sqlLimitOffset } from '../utils/paginationSql.js';
 
 const mapProduct = (row) => ({
   id: row.id,
@@ -52,8 +53,8 @@ export const quickSearchProducts = async ({ q, limit = 12 }) => {
          ELSE 3
        END,
        p.nombre ASC
-     LIMIT ?`,
-    [term, term, term, term, term, exactCode, `${exactCode}%`, `${q}%`, limit]
+     ${sqlLimit(limit, { maxLimit: 50 })}`,
+    [term, term, term, term, term, exactCode, `${exactCode}%`, `${q}%`]
   );
 
   return rows.map(mapProduct);
@@ -93,8 +94,8 @@ export const listProducts = async ({ page, limit, search, estado, categoria_id }
     `${baseSelect}
      WHERE ${whereClause}
      ORDER BY p.fecha_creacion DESC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+     ${sqlLimitOffset(limit, offset)}`,
+    params
   );
 
   return {

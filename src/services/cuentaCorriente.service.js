@@ -1,5 +1,6 @@
 import { pool } from '../config/database.js';
 import { AppError } from '../utils/AppError.js';
+import { sqlLimitOffset } from '../utils/paginationSql.js';
 import { logAudit } from '../utils/audit.js';
 import { getActivePaymentMethodByCode } from './paymentMethod.service.js';
 import {
@@ -208,8 +209,8 @@ export const listAccounts = async ({ page, limit, search, solo_deuda, saldo_min,
      FROM clientes c
      WHERE ${whereClause}
      ORDER BY c.saldo_cuenta_corriente DESC, c.nombre ASC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+     ${sqlLimitOffset(limit, offset)}`,
+    params
   );
 
   return {
@@ -268,8 +269,8 @@ export const listMovements = async (clienteId, { page, limit }) => {
      LEFT JOIN ventas v ON v.id = m.venta_id
      WHERE m.cliente_id = ?
      ORDER BY m.fecha DESC, m.id DESC
-     LIMIT ? OFFSET ?`,
-    [clienteId, limit, offset]
+     ${sqlLimitOffset(limit, offset)}`,
+    [clienteId]
   );
 
   return {

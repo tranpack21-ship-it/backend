@@ -1,5 +1,6 @@
 import { pool } from '../config/database.js';
 import { AppError } from '../utils/AppError.js';
+import { sqlLimitOffset } from '../utils/paginationSql.js';
 
 const mapReceipt = (row) => ({
   id: row.id,
@@ -156,8 +157,8 @@ export const listReceipts = async (query) => {
      LEFT JOIN clientes cl ON cl.id = v.cliente_id
      WHERE ${whereClause}
      ORDER BY c.fecha_emision DESC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+     ${sqlLimitOffset(limit, offset)}`,
+    params
   );
 
   return {

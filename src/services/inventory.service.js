@@ -1,5 +1,6 @@
 import { pool } from '../config/database.js';
 import { AppError } from '../utils/AppError.js';
+import { sqlLimitOffset } from '../utils/paginationSql.js';
 import { withTransaction } from '../utils/transaction.js';
 
 const mapMovement = (row) => ({
@@ -124,8 +125,8 @@ export const listMovements = async (query) => {
     `${baseSelect}
      WHERE ${whereClause}
      ORDER BY m.fecha DESC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+     ${sqlLimitOffset(limit, offset)}`,
+    params
   );
 
   return {
@@ -232,8 +233,8 @@ export const listStockAlerts = async (query) => {
        CASE WHEN p.id = ? THEN 0 ELSE 1 END,
        p.stock ASC,
        p.nombre ASC
-     LIMIT ? OFFSET ?`,
-    [...params, producto_id || 0, limit, offset]
+     ${sqlLimitOffset(limit, offset)}`,
+    [...params, producto_id || 0]
   );
 
   return {

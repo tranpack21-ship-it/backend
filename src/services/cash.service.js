@@ -1,5 +1,6 @@
 import { pool } from '../config/database.js';
 import { AppError } from '../utils/AppError.js';
+import { sqlLimitOffset } from '../utils/paginationSql.js';
 import { withTransaction } from '../utils/transaction.js';
 import { logAudit } from '../utils/audit.js';
 import { getActivePaymentMethodByCode } from './paymentMethod.service.js';
@@ -283,8 +284,8 @@ export const listSessions = async (query) => {
      INNER JOIN usuarios u ON u.id = s.usuario_id
      WHERE ${whereClause}
      ORDER BY s.fecha_apertura DESC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+     ${sqlLimitOffset(limit, offset)}`,
+    params
   );
 
   return {
@@ -323,8 +324,8 @@ export const listMovements = async (sesionId, query) => {
      LEFT JOIN metodos_pago mp ON mp.codigo = m.metodo_pago
      WHERE ${whereClause}
      ORDER BY m.fecha DESC, m.id DESC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+     ${sqlLimitOffset(limit, offset)}`,
+    params
   );
 
   return {

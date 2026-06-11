@@ -1,4 +1,5 @@
 import { pool } from '../config/database.js';
+import { sqlLimit } from '../utils/paginationSql.js';
 
 export const getDashboardReport = async ({ fecha_desde, fecha_hasta }) => {
   const params = [];
@@ -132,8 +133,8 @@ export const getTopProductsReport = async ({ fecha_desde, fecha_hasta, limit = 1
      WHERE ${conditions.join(' AND ')}
      GROUP BY d.producto_id, d.producto_codigo, d.producto_nombre
      ORDER BY cantidad_vendida DESC
-     LIMIT ?`,
-    [...params, limit]
+     ${sqlLimit(limit)}`,
+    params
   );
 
   return rows.map((r) => ({

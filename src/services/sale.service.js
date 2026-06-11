@@ -1,5 +1,6 @@
 import { pool } from '../config/database.js';
 import { AppError } from '../utils/AppError.js';
+import { sqlLimitOffset } from '../utils/paginationSql.js';
 import { withTransaction } from '../utils/transaction.js';
 import { registerMovement } from './inventory.service.js';
 import {
@@ -373,8 +374,8 @@ export const listSales = async (query, usuarioId = null) => {
      LEFT JOIN caja_sesiones cs ON cs.id = v.caja_sesion_id
      WHERE ${whereClause}
      ORDER BY v.fecha_venta DESC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+     ${sqlLimitOffset(limit, offset)}`,
+    params
   );
 
   let openSessionId = null;

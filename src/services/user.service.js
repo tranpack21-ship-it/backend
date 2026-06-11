@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { pool } from '../config/database.js';
+import { sqlLimitOffset } from '../utils/paginationSql.js';
 import { AppError } from '../utils/AppError.js';
 import { assignDefaultEmployeePermissions } from './permission.service.js';
 import { ROLES } from '../constants/permissions.js';
@@ -54,8 +55,8 @@ export const listUsers = async ({ page, limit, search, estado, rol_id }) => {
      INNER JOIN roles r ON r.id = u.rol_id
      WHERE ${whereClause}
      ORDER BY u.fecha_creacion DESC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+     ${sqlLimitOffset(limit, offset)}`,
+    params
   );
 
   return {

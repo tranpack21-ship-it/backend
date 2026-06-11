@@ -1,4 +1,5 @@
 import { pool } from '../config/database.js';
+import { sqlLimitOffset } from '../utils/paginationSql.js';
 
 const mapAudit = (row) => ({
   id: row.id,
@@ -52,8 +53,8 @@ export const listAudit = async (query) => {
      LEFT JOIN usuarios u ON u.id = a.usuario_id
      WHERE ${whereClause}
      ORDER BY a.fecha DESC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+     ${sqlLimitOffset(limit, offset)}`,
+    params
   );
 
   return {

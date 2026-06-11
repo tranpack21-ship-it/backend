@@ -1,4 +1,5 @@
 import { pool } from '../config/database.js';
+import { sqlLimitOffset } from '../utils/paginationSql.js';
 import { AppError } from '../utils/AppError.js';
 
 const mapClient = (row) => ({
@@ -48,8 +49,8 @@ export const listClients = async ({ page, limit, search, estado }) => {
     `SELECT c.* FROM clientes c
      WHERE ${whereClause}
      ORDER BY c.nombre ASC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+     ${sqlLimitOffset(limit, offset)}`,
+    params
   );
 
   return {
