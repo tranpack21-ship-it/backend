@@ -1,5 +1,6 @@
 import { pool } from '../config/database.js';
 import { AppError } from '../utils/AppError.js';
+import { fetchSalePayments, MIXED_PAYMENT_CODE } from '../utils/salePayments.js';
 import { sqlLimitOffset } from '../utils/paginationSql.js';
 
 const mapReceipt = (row) => ({
@@ -78,6 +79,12 @@ export const getReceiptWithSaleDetail = async (ventaId) => {
   );
 
   const r = receiptRows[0];
+  const pagos = await fetchSalePayments(ventaId, pool);
+  const metodoPagoNombre =
+    r.metodo_pago === MIXED_PAYMENT_CODE
+      ? pagos.map((p) => `${p.metodo_pago_nombre} ${p.monto}`).join(' · ')
+      : r.metodo_pago_nombre ?? r.metodo_pago;
+
   return {
     comprobante: {
       id: r.id,
@@ -92,9 +99,10 @@ export const getReceiptWithSaleDetail = async (ventaId) => {
       total: Number(r.total),
       estado: r.venta_estado,
       metodo_pago: r.metodo_pago,
-      metodo_pago_nombre: r.metodo_pago_nombre ?? r.metodo_pago,
+      metodo_pago_nombre: metodoPagoNombre,
       monto_recibido: r.monto_recibido != null ? Number(r.monto_recibido) : null,
       vuelto: r.vuelto != null ? Number(r.vuelto) : null,
+      pagos,
       fecha_venta: r.fecha_venta,
       observaciones: r.observaciones,
       cliente_id: r.cliente_id ?? null,

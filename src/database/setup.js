@@ -69,6 +69,53 @@ export const applySchemaPatches = async (connection) => {
       MODIFY COLUMN codigo VARCHAR(50) NULL;
   `);
   log('✓ productos.codigo — opcional (NULL permitido)');
+
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS venta_pagos (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      venta_id INT UNSIGNED NOT NULL,
+      metodo_pago VARCHAR(50) NOT NULL,
+      monto DECIMAL(12, 2) NOT NULL,
+      monto_recibido DECIMAL(12, 2) DEFAULT NULL,
+      vuelto DECIMAL(12, 2) DEFAULT NULL,
+      orden TINYINT UNSIGNED NOT NULL DEFAULT 1,
+      fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_venta_pagos_venta (venta_id),
+      KEY idx_venta_pagos_metodo (metodo_pago),
+      CONSTRAINT fk_venta_pagos_venta FOREIGN KEY (venta_id) REFERENCES ventas (id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+
+  await connection.query(`
+    INSERT INTO venta_pagos (venta_id, metodo_pago, monto, monto_recibido, vuelto, orden)
+    SELECT v.id, v.metodo_pago, v.total, v.monto_recibido, v.vuelto, 1
+    FROM ventas v
+    WHERE NOT EXISTS (
+      SELECT 1 FROM venta_pagos vp WHERE vp.venta_id = v.id
+    );
+  `);
+  log('✓ venta_pagos — pagos divididos y migración de ventas existentes');
+
+  await connection.query(`
+    INSERT INTO caja_movimientos (sesion_id, tipo, monto, metodo_pago, descripcion, referencia, venta_id, usuario_id, fecha)
+    SELECT v.caja_sesion_id, 'venta', vp.monto, vp.metodo_pago,
+           CONCAT('Venta ', v.numero), v.numero, v.id, v.usuario_id, v.fecha_venta
+    FROM venta_pagos vp
+    INNER JOIN ventas v ON v.id = vp.venta_id
+    LEFT JOIN metodos_pago mp ON mp.codigo = vp.metodo_pago
+    WHERE v.caja_sesion_id IS NOT NULL
+      AND v.estado = 'completada'
+      AND COALESCE(mp.genera_cargo_cc, 0) = 0
+      AND NOT EXISTS (
+        SELECT 1 FROM caja_movimientos m
+        WHERE m.venta_id = v.id
+          AND m.tipo = 'venta'
+          AND m.metodo_pago = vp.metodo_pago
+          AND ABS(m.monto - vp.monto) < 0.01
+      );
+  `);
+  log('✓ caja_movimientos — ventas históricas sin movimiento registrado');
 };
 
 const seedAdmin = async (connection) => {

@@ -14,6 +14,15 @@ const lineItemSchema = z.object({
   descuento: z.coerce.number().min(0).optional().default(0),
 });
 
+const salePaymentLineSchema = z.object({
+  metodo_pago: z.string().min(1).max(50).trim(),
+  monto: z.coerce.number().positive('El monto debe ser mayor a 0'),
+  monto_recibido: z.preprocess(
+    emptyToNull,
+    z.union([z.null(), z.coerce.number().min(0)]).optional()
+  ),
+});
+
 export const createSaleSchema = z.object({
   cliente_id: z.preprocess(
     emptyToNull,
@@ -31,6 +40,7 @@ export const createSaleSchema = z.object({
   ),
   tipo_comprobante: z.enum(TIPOS_COMPROBANTE).optional().default('ticket'),
   requiere_caja: z.coerce.boolean().optional().default(false),
+  pagos: z.array(salePaymentLineSchema).min(1).max(10).optional(),
   items: z.array(lineItemSchema).min(1, 'Debe incluir al menos un producto'),
 });
 

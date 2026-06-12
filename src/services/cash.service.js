@@ -72,15 +72,16 @@ export const getSessionBreakdown = async (sesionId, connection = null) => {
   const conn = connection || pool;
 
   const [ventasRows] = await conn.execute(
-    `SELECT v.metodo_pago,
-            COALESCE(mp.nombre, v.metodo_pago) AS nombre,
+    `SELECT vp.metodo_pago,
+            COALESCE(mp.nombre, vp.metodo_pago) AS nombre,
             COALESCE(mp.genera_cargo_cc, 0) AS genera_cargo_cc,
             COUNT(*) AS cantidad,
-            COALESCE(SUM(v.total), 0) AS total
-     FROM ventas v
-     LEFT JOIN metodos_pago mp ON mp.codigo = v.metodo_pago
+            COALESCE(SUM(vp.monto), 0) AS total
+     FROM venta_pagos vp
+     INNER JOIN ventas v ON v.id = vp.venta_id
+     LEFT JOIN metodos_pago mp ON mp.codigo = vp.metodo_pago
      WHERE v.caja_sesion_id = ? AND v.estado = 'completada'
-     GROUP BY v.metodo_pago, mp.nombre, mp.genera_cargo_cc
+     GROUP BY vp.metodo_pago, mp.nombre, mp.genera_cargo_cc
      ORDER BY total DESC`,
     [sesionId]
   );
@@ -391,47 +392,49 @@ export const addMovement = async (sesionId, data, usuarioId, ip = null) => {
 };
 
 export const registerSaleInCash = async (
-  { sesionId, ventaId, numero, total, metodoPago },
+  { sesionId, ventaId, numero, monto, metodoPago },
   usuarioId,
   conn
 ) => {
   if (!sesionId) return;
 
   const codigo = metodoPago || 'efectivo';
+  const amount = Number(monto);
 
   await conn.execute(
     `INSERT INTO caja_movimientos (sesion_id, tipo, monto, metodo_pago, descripcion, referencia, venta_id, usuario_id)
      VALUES (?, 'venta', ?, ?, ?, ?, ?, ?)`,
-    [sesionId, total, codigo, `Venta ${numero}`, numero, ventaId, usuarioId]
+    [sesionId, amount, codigo, `Venta ${numero}`, numero, ventaId, usuarioId]
   );
 
   if (await affectsPhysicalCash(codigo, conn)) {
     await conn.execute(
       'UPDATE caja_sesiones SET total_ventas_efectivo = total_ventas_efectivo + ? WHERE id = ?',
-      [total, sesionId]
+      [amount, sesionId]
     );
   }
 };
 
 export const reverseSaleInCash = async (
-  { sesionId, ventaId, numero, total, metodoPago },
+  { sesionId, ventaId, numero, monto, metodoPago },
   usuarioId,
   conn
 ) => {
   if (!sesionId) return;
 
   const codigo = metodoPago || 'efectivo';
+  const amount = Number(monto);
 
   await conn.execute(
     `INSERT INTO caja_movimientos (sesion_id, tipo, monto, metodo_pago, descripcion, referencia, venta_id, usuario_id)
      VALUES (?, 'anulacion', ?, ?, ?, ?, ?, ?)`,
-    [sesionId, total, codigo, `Anulación ${numero}`, numero, ventaId, usuarioId]
+    [sesionId, amount, codigo, `Anulación ${numero}`, numero, ventaId, usuarioId]
   );
 
   if (await affectsPhysicalCash(codigo, conn)) {
     await conn.execute(
       'UPDATE caja_sesiones SET total_ventas_efectivo = total_ventas_efectivo - ? WHERE id = ?',
-      [total, sesionId]
+      [amount, sesionId]
     );
   }
 };

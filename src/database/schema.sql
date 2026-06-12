@@ -214,6 +214,21 @@ CREATE TABLE IF NOT EXISTS venta_detalle (
   CONSTRAINT fk_detalle_producto FOREIGN KEY (producto_id) REFERENCES productos (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS venta_pagos (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  venta_id INT UNSIGNED NOT NULL,
+  metodo_pago VARCHAR(50) NOT NULL,
+  monto DECIMAL(12, 2) NOT NULL,
+  monto_recibido DECIMAL(12, 2) DEFAULT NULL,
+  vuelto DECIMAL(12, 2) DEFAULT NULL,
+  orden TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_venta_pagos_venta (venta_id),
+  KEY idx_venta_pagos_metodo (metodo_pago),
+  CONSTRAINT fk_venta_pagos_venta FOREIGN KEY (venta_id) REFERENCES ventas (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ------------------------------------------------------------
 -- Inventario
 -- ------------------------------------------------------------

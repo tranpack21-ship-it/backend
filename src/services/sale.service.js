@@ -14,7 +14,12 @@ import {
   registerSaleCharge,
   reverseSaleCharge,
 } from './cuentaCorriente.service.js';
-import { resolvePaymentMethodForSale } from './paymentMethod.service.js';
+import {
+  fetchSalePayments,
+  insertSalePayments,
+  MIXED_PAYMENT_CODE,
+  resolveAndValidatePayments,
+} from '../utils/salePayments.js';
 
 const computePuedeAnular = (venta, openSessionId) => {
   if (venta.estado !== 'completada') return false;
@@ -36,7 +41,10 @@ const mapSaleList = (row, openSessionId = null) => ({
   descuento: Number(row.descuento),
   total: Number(row.total),
   metodo_pago: row.metodo_pago,
-  metodo_pago_nombre: row.metodo_pago_nombre ?? row.metodo_pago,
+  metodo_pago_nombre:
+    row.metodo_pago === MIXED_PAYMENT_CODE
+      ? 'Pago combinado'
+      : row.metodo_pago_nombre ?? row.metodo_pago,
   monto_recibido: row.monto_recibido != null ? Number(row.monto_recibido) : null,
   vuelto: row.vuelto != null ? Number(row.vuelto) : null,
   caja_sesion_id: row.caja_sesion_id,
@@ -87,24 +95,7 @@ export const createSale = async (data, usuarioId, ip = null) => {
       if (!client.length) throw new AppError('Cliente no válido o inactivo', 400);
     }
 
-    const paymentMethod = await resolvePaymentMethodForSale(data.metodo_pago, conn);
-    const metodoPago = paymentMethod.codigo;
-
-    if (paymentMethod.requiere_cliente && !data.cliente_id) {
-      throw new AppError(
-        `Debe seleccionar un cliente para pagos con "${paymentMethod.nombre}"`,
-        400
-      );
-    }
-
     const openSession = await getOpenSessionForUser(usuarioId, conn);
-
-    const needsCashRegister =
-      data.requiere_caja && !paymentMethod.genera_cargo_cc && paymentMethod.registra_en_caja;
-
-    if (needsCashRegister && !openSession) {
-      throw new AppError('Debe abrir la caja antes de registrar ventas', 400);
-    }
 
     const lineItems = [];
     let subtotal = 0;
@@ -154,18 +145,10 @@ export const createSale = async (data, usuarioId, ip = null) => {
 
     const total = subtotal - descuentoGlobal;
 
-    let montoRecibido = data.monto_recibido != null ? Number(data.monto_recibido) : null;
-    let vuelto = null;
+    const payments = await resolveAndValidatePayments(data, total, conn);
 
-    if (paymentMethod.requiere_monto_recibido) {
-      if (montoRecibido == null) montoRecibido = total;
-      if (montoRecibido < total) {
-        throw new AppError('El monto recibido debe ser mayor o igual al total', 400);
-      }
-      vuelto = montoRecibido - total;
-    } else {
-      montoRecibido = null;
-      vuelto = null;
+    if (data.requiere_caja && payments.needsCashSession && !openSession) {
+      throw new AppError('Debe abrir la caja antes de registrar ventas', 400);
     }
 
     const numero = await generateSaleNumber(conn);
@@ -183,9 +166,9 @@ export const createSale = async (data, usuarioId, ip = null) => {
         subtotal,
         descuentoGlobal,
         total,
-        metodoPago,
-        montoRecibido,
-        vuelto,
+        payments.summaryCode,
+        payments.headerMontoRecibido,
+        payments.headerVuelto,
         cajaSesionId,
         data.observaciones ?? null,
       ]
@@ -224,20 +207,30 @@ export const createSale = async (data, usuarioId, ip = null) => {
       );
     }
 
-    if (cajaSesionId && paymentMethod.registra_en_caja) {
-      await registerSaleInCash(
-        { sesionId: cajaSesionId, ventaId, numero, total, metodoPago },
-        usuarioId,
-        conn
-      );
-    }
+    await insertSalePayments(ventaId, payments.lines, conn);
 
-    if (paymentMethod.genera_cargo_cc) {
-      await registerSaleCharge(
-        { clienteId: data.cliente_id, ventaId, numero, total },
-        usuarioId,
-        conn
-      );
+    for (const pago of payments.lines) {
+      if (!pago.paymentMethod.genera_cargo_cc && cajaSesionId) {
+        await registerSaleInCash(
+          {
+            sesionId: cajaSesionId,
+            ventaId,
+            numero,
+            monto: pago.monto,
+            metodoPago: pago.metodo_pago,
+          },
+          usuarioId,
+          conn
+        );
+      }
+
+      if (pago.paymentMethod.genera_cargo_cc) {
+        await registerSaleCharge(
+          { clienteId: data.cliente_id, ventaId, numero, total: pago.monto },
+          usuarioId,
+          conn
+        );
+      }
     }
 
     await createReceiptForSale(
@@ -249,7 +242,16 @@ export const createSale = async (data, usuarioId, ip = null) => {
       usuarioId,
       accion: 'venta.crear',
       modulo: 'ventas',
-      detalle: { venta_id: ventaId, numero, total, metodo_pago: metodoPago },
+      detalle: {
+        venta_id: ventaId,
+        numero,
+        total,
+        metodo_pago: payments.summaryCode,
+        pagos: payments.lines.map((p) => ({
+          metodo_pago: p.metodo_pago,
+          monto: p.monto,
+        })),
+      },
       ip,
     });
 
@@ -288,9 +290,18 @@ export const getSaleById = async (id, connection = null, usuarioId = null) => {
     openSessionId = openSession?.id ?? null;
   }
 
+  const pagos = await fetchSalePayments(id, conn);
   const sale = mapSaleList(sales[0], openSessionId);
+
+  const metodoPagoNombre =
+    sale.metodo_pago === MIXED_PAYMENT_CODE
+      ? pagos.map((p) => p.metodo_pago_nombre).join(' + ')
+      : sale.metodo_pago_nombre;
+
   return {
     ...sale,
+    metodo_pago_nombre: metodoPagoNombre,
+    pagos,
     comprobante_tipo: sales[0].comprobante_tipo,
     caja_fecha_apertura: sales[0].caja_fecha_apertura,
     detalle: details.map(mapSaleDetail),
@@ -438,38 +449,42 @@ export const cancelSale = async (id, usuarioId, ip = null) => {
       );
     }
 
-    const [pmRows] = await conn.execute(
-      'SELECT * FROM metodos_pago WHERE codigo = ? LIMIT 1',
-      [venta.metodo_pago]
-    );
-    const pm = pmRows[0];
+    const pagos = venta.pagos?.length ? venta.pagos : await fetchSalePayments(id, conn);
 
-    if (venta.caja_sesion_id && pm && pm.registra_en_caja) {
-      await reverseSaleInCash(
-        {
-          sesionId: venta.caja_sesion_id,
-          ventaId: id,
-          numero: venta.numero,
-          total: venta.total,
-          metodoPago: venta.metodo_pago,
-        },
-        usuarioId,
-        conn
+    for (const pago of pagos) {
+      const [pmRows] = await conn.execute(
+        'SELECT * FROM metodos_pago WHERE codigo = ? LIMIT 1',
+        [pago.metodo_pago]
       );
-    }
+      const pm = pmRows[0];
+      const generaCc = pm ? Boolean(pm.genera_cargo_cc) : pago.metodo_pago === 'cuenta_corriente';
 
-    const generaCc = pm ? Boolean(pm.genera_cargo_cc) : venta.metodo_pago === 'cuenta_corriente';
-    if (generaCc && venta.cliente_id) {
-      await reverseSaleCharge(
-        {
-          clienteId: venta.cliente_id,
-          ventaId: id,
-          numero: venta.numero,
-          total: venta.total,
-        },
-        usuarioId,
-        conn
-      );
+      if (venta.caja_sesion_id && !generaCc) {
+        await reverseSaleInCash(
+          {
+            sesionId: venta.caja_sesion_id,
+            ventaId: id,
+            numero: venta.numero,
+            monto: pago.monto,
+            metodoPago: pago.metodo_pago,
+          },
+          usuarioId,
+          conn
+        );
+      }
+
+      if (generaCc && venta.cliente_id) {
+        await reverseSaleCharge(
+          {
+            clienteId: venta.cliente_id,
+            ventaId: id,
+            numero: venta.numero,
+            total: pago.monto,
+          },
+          usuarioId,
+          conn
+        );
+      }
     }
 
     await conn.execute("UPDATE ventas SET estado = 'anulada' WHERE id = ?", [id]);
