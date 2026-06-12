@@ -68,7 +68,6 @@ export const createProductSchema = z
     precio_venta_paquete: optionalPaquetePrecio,
     unidades_por_paquete: stockSchema.optional().default(1),
     precio_costo: precioSchema.optional().default(0),
-    stock: stockSchema.optional().default(0),
     stock_minimo: stockSchema.optional().default(0),
     unidad_medida: z.enum(UNIDADES_MEDIDA, {
       errorMap: () => ({ message: 'Unidad de medida no válida' }),
@@ -100,7 +99,6 @@ export const updateProductSchema = z
     precio_venta_paquete: optionalPaquetePrecio,
     unidades_por_paquete: stockSchema.optional(),
     precio_costo: precioSchema.optional(),
-    stock: stockSchema.optional(),
     stock_minimo: stockSchema.optional(),
     unidad_medida: z.enum(UNIDADES_MEDIDA).optional(),
     estado: z.enum(['activo', 'inactivo']).optional(),
@@ -142,6 +140,6 @@ export const listProductsQuerySchema = z.object({
     .optional()
     .default(10),
   search: z.string().max(100).optional().default(''),
-  estado: z.enum(['activo', 'inactivo', 'todos']).optional().default('todos'),
+  estado: z.enum(['activo', 'inactivo', 'todos']).optional().default('activo'),
   categoria_id: z.coerce.number().int().positive().optional(),
 });

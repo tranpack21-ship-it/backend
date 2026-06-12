@@ -47,3 +47,12 @@ export const deactivate = asyncHandler(async (req, res) => {
     data: { producto },
   });
 });
+
+export const remove = asyncHandler(async (req, res) => {
+  const result = await productService.deleteProduct(req.params.id);
+  res.json({
+    success: true,
+    message: 'Producto eliminado correctamente',
+    data: result,
+  });
+});

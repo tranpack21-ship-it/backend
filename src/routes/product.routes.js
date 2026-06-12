@@ -71,4 +71,10 @@ router.patch(
   productController.deactivate
 );
 
+router.delete(
+  '/:id',
+  authorizePermission(PERMISSION_CODES.PRODUCTOS_DESACTIVAR),
+  productController.remove
+);
+
 export default router;

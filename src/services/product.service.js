@@ -1,6 +1,7 @@
 import { pool } from '../config/database.js';
 import { AppError } from '../utils/AppError.js';
 import { sqlLimit, sqlLimitOffset } from '../utils/paginationSql.js';
+import { withTransaction } from '../utils/transaction.js';
 
 const mapProduct = (row) => ({
   id: row.id,
@@ -22,6 +23,8 @@ const mapProduct = (row) => ({
   unidad_medida: row.unidad_medida,
   estado: row.estado,
   stock_bajo: Number(row.stock) <= Number(row.stock_minimo),
+  ventas_asociadas: Number(row.ventas_asociadas ?? 0),
+  puede_eliminar: Number(row.ventas_asociadas ?? 0) === 0,
   fecha_creacion: row.fecha_creacion,
   fecha_actualizacion: row.fecha_actualizacion,
 });
@@ -32,7 +35,8 @@ const baseSelect = `
          p.categoria_id, c.nombre AS categoria_nombre,
          p.precio_venta, p.precio_venta_paquete, p.unidades_por_paquete,
          p.precio_costo, p.stock, p.stock_minimo,
-         p.unidad_medida, p.estado, p.fecha_creacion, p.fecha_actualizacion
+         p.unidad_medida, p.estado, p.fecha_creacion, p.fecha_actualizacion,
+         (SELECT COUNT(*) FROM venta_detalle vd WHERE vd.producto_id = p.id) AS ventas_asociadas
   FROM productos p
   INNER JOIN categorias c ON c.id = p.categoria_id
 `;
@@ -168,7 +172,7 @@ export const createProduct = async (data) => {
       data.precio_venta_paquete ?? null,
       data.unidades_por_paquete ?? 1,
       data.precio_costo ?? 0,
-      data.stock ?? 0,
+      0,
       data.stock_minimo ?? 0,
       data.unidad_medida,
       data.estado,
@@ -252,11 +256,6 @@ export const updateProduct = async (id, data) => {
     params.push(data.precio_costo);
   }
 
-  if (data.stock !== undefined) {
-    updates.push('stock = ?');
-    params.push(data.stock);
-  }
-
   if (data.stock_minimo !== undefined) {
     updates.push('stock_minimo = ?');
     params.push(data.stock_minimo);
@@ -289,4 +288,31 @@ export const deactivateProduct = async (id) => {
   await getProductById(id);
   await pool.execute("UPDATE productos SET estado = 'inactivo' WHERE id = ?", [id]);
   return getProductById(id);
+};
+
+export const deleteProduct = async (id) => {
+  return withTransaction(async (conn) => {
+    const producto = await getProductById(id);
+
+    const [sales] = await conn.execute(
+      'SELECT COUNT(*) AS total FROM venta_detalle WHERE producto_id = ?',
+      [id]
+    );
+
+    if (Number(sales[0].total) > 0) {
+      throw new AppError(
+        'No se puede eliminar: el producto está asociado a ventas registradas. Desactívelo en su lugar.',
+        409
+      );
+    }
+
+    await conn.execute('DELETE FROM movimientos_inventario WHERE producto_id = ?', [id]);
+    await conn.execute('DELETE FROM productos WHERE id = ?', [id]);
+
+    return {
+      id: producto.id,
+      nombre: producto.nombre,
+      eliminado: true,
+    };
+  });
 };
