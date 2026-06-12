@@ -61,13 +61,36 @@ const applySchema = async (connection) => {
   log('✓ schema.sql — tablas y datos iniciales');
 };
 
+const columnExists = async (connection, table, column) => {
+  const [rows] = await connection.query(
+    `SELECT 1 FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?
+     LIMIT 1`,
+    [table, column]
+  );
+  return rows.length > 0;
+};
+
+const columnIsNullable = async (connection, table, column) => {
+  const [rows] = await connection.query(
+    `SELECT IS_NULLABLE FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?
+     LIMIT 1`,
+    [table, column]
+  );
+  return rows[0]?.IS_NULLABLE === 'YES';
+};
+
 /** Parches idempotentes para bases ya existentes (deploy en Railway). */
 export const applySchemaPatches = async (connection) => {
-  await connection.query(`
-    UPDATE productos SET codigo = NULL WHERE codigo = '';
-    ALTER TABLE productos
-      MODIFY COLUMN codigo VARCHAR(50) NULL;
-  `);
+  // Una sentencia por query: el pool de producción no usa multipleStatements.
+  await connection.query(`UPDATE productos SET codigo = NULL WHERE codigo = ''`);
+  const codigoNullable = await columnIsNullable(connection, 'productos', 'codigo');
+  if (!codigoNullable) {
+    await connection.query(
+      `ALTER TABLE productos MODIFY COLUMN codigo VARCHAR(50) NULL`
+    );
+  }
   log('✓ productos.codigo — opcional (NULL permitido)');
 
   await connection.query(`
@@ -117,52 +140,37 @@ export const applySchemaPatches = async (connection) => {
   `);
   log('✓ caja_movimientos — ventas históricas sin movimiento registrado');
 
-  const [prodCols] = await connection.query(
-    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'productos'
-       AND COLUMN_NAME IN ('precio_venta_paquete', 'unidades_por_paquete')`
-  );
-  const prodColSet = new Set(prodCols.map((r) => r.COLUMN_NAME));
-
-  if (!prodColSet.has('precio_venta_paquete')) {
-    await connection.query(`
-      ALTER TABLE productos
-        ADD COLUMN precio_venta_paquete DECIMAL(12, 2) NULL DEFAULT NULL AFTER precio_venta;
-    `);
+  if (!(await columnExists(connection, 'productos', 'precio_venta_paquete'))) {
+    await connection.query(
+      `ALTER TABLE productos
+         ADD COLUMN precio_venta_paquete DECIMAL(12, 2) NULL DEFAULT NULL AFTER precio_venta`
+    );
   }
-  if (!prodColSet.has('unidades_por_paquete')) {
-    await connection.query(`
-      ALTER TABLE productos
-        ADD COLUMN unidades_por_paquete DECIMAL(12, 3) NOT NULL DEFAULT 1.000 AFTER precio_venta_paquete;
-    `);
+  if (!(await columnExists(connection, 'productos', 'unidades_por_paquete'))) {
+    await connection.query(
+      `ALTER TABLE productos
+         ADD COLUMN unidades_por_paquete DECIMAL(12, 3) NOT NULL DEFAULT 1.000 AFTER precio_venta_paquete`
+    );
   }
   log('✓ productos — precio suelto / paquete');
 
-  const [detCols] = await connection.query(
-    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'venta_detalle'
-       AND COLUMN_NAME IN ('modo_venta', 'cantidad_inventario')`
-  );
-  const detColSet = new Set(detCols.map((r) => r.COLUMN_NAME));
-
-  if (!detColSet.has('modo_venta')) {
-    await connection.query(`
-      ALTER TABLE venta_detalle
-        ADD COLUMN modo_venta ENUM('suelto', 'paquete') NOT NULL DEFAULT 'suelto' AFTER cantidad;
-    `);
+  if (!(await columnExists(connection, 'venta_detalle', 'modo_venta'))) {
+    await connection.query(
+      `ALTER TABLE venta_detalle
+         ADD COLUMN modo_venta ENUM('suelto', 'paquete') NOT NULL DEFAULT 'suelto' AFTER cantidad`
+    );
   }
-  if (!detColSet.has('cantidad_inventario')) {
-    await connection.query(`
-      ALTER TABLE venta_detalle
-        ADD COLUMN cantidad_inventario DECIMAL(12, 3) NULL AFTER modo_venta;
-    `);
-    await connection.query(`
-      UPDATE venta_detalle SET cantidad_inventario = cantidad WHERE cantidad_inventario IS NULL;
-    `);
-    await connection.query(`
-      ALTER TABLE venta_detalle
-        MODIFY COLUMN cantidad_inventario DECIMAL(12, 3) NOT NULL;
-    `);
+  if (!(await columnExists(connection, 'venta_detalle', 'cantidad_inventario'))) {
+    await connection.query(
+      `ALTER TABLE venta_detalle
+         ADD COLUMN cantidad_inventario DECIMAL(12, 3) NULL AFTER modo_venta`
+    );
+    await connection.query(
+      `UPDATE venta_detalle SET cantidad_inventario = cantidad WHERE cantidad_inventario IS NULL`
+    );
+    await connection.query(
+      `ALTER TABLE venta_detalle MODIFY COLUMN cantidad_inventario DECIMAL(12, 3) NOT NULL`
+    );
   }
   log('✓ venta_detalle — modo de venta y cantidad de inventario');
 };
