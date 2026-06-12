@@ -35,13 +35,23 @@ const stockSchema = z.coerce
   .min(0, 'No puede ser negativo')
   .max(999999999.999, 'Stock demasiado alto');
 
+const codigoSchema = z.preprocess(
+  emptyToNull,
+  z
+    .union([
+      z.null(),
+      z
+        .string()
+        .min(1, 'Mínimo 1 carácter')
+        .max(50)
+        .trim()
+        .regex(/^[a-zA-Z0-9._-]+$/, 'Solo letras, números, . _ -'),
+    ])
+    .optional()
+);
+
 export const createProductSchema = z.object({
-  codigo: z
-    .string()
-    .min(1, 'El código es obligatorio')
-    .max(50)
-    .trim()
-    .regex(/^[a-zA-Z0-9._-]+$/, 'Solo letras, números, . _ -'),
+  codigo: codigoSchema,
   nombre: z.string().min(2).max(150).trim(),
   descripcion: z.string().max(2000).optional().nullable(),
   imagen_url: optionalUrlSchema,
@@ -60,13 +70,7 @@ export const createProductSchema = z.object({
 
 export const updateProductSchema = z
   .object({
-    codigo: z
-      .string()
-      .min(1)
-      .max(50)
-      .trim()
-      .regex(/^[a-zA-Z0-9._-]+$/)
-      .optional(),
+    codigo: codigoSchema,
     nombre: z.string().min(2).max(150).trim().optional(),
     descripcion: z.string().max(2000).optional().nullable(),
     imagen_url: optionalUrlSchema,

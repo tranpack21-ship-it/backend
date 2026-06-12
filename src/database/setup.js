@@ -61,6 +61,16 @@ const applySchema = async (connection) => {
   log('✓ schema.sql — tablas y datos iniciales');
 };
 
+/** Parches idempotentes para bases ya existentes (deploy en Railway). */
+export const applySchemaPatches = async (connection) => {
+  await connection.query(`
+    UPDATE productos SET codigo = NULL WHERE codigo = '';
+    ALTER TABLE productos
+      MODIFY COLUMN codigo VARCHAR(50) NULL;
+  `);
+  log('✓ productos.codigo — opcional (NULL permitido)');
+};
+
 const seedAdmin = async (connection) => {
   const username = process.env.ADMIN_USERNAME || 'admin';
   const password = process.env.ADMIN_PASSWORD;
@@ -126,6 +136,7 @@ export const setupDatabase = async () => {
   const connection = await mysql.createConnection(connectionOptions(true));
   try {
     await applySchema(connection);
+    await applySchemaPatches(connection);
     await seedAdmin(connection);
     log('Configuración completada — base de datos lista.');
   } finally {

@@ -130,13 +130,17 @@ const validateCategoryActive = async (categoriaId) => {
 };
 
 export const createProduct = async (data) => {
-  const [existing] = await pool.execute(
-    'SELECT id FROM productos WHERE codigo = ? LIMIT 1',
-    [data.codigo]
-  );
+  const codigo = data.codigo ?? null;
 
-  if (existing.length) {
-    throw new AppError('Ya existe un producto con ese código', 409);
+  if (codigo) {
+    const [existing] = await pool.execute(
+      'SELECT id FROM productos WHERE codigo = ? LIMIT 1',
+      [codigo]
+    );
+
+    if (existing.length) {
+      throw new AppError('Ya existe un producto con ese código', 409);
+    }
   }
 
   await validateCategoryActive(data.categoria_id);
@@ -148,7 +152,7 @@ export const createProduct = async (data) => {
       unidad_medida, estado
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      data.codigo,
+      codigo,
       data.nombre,
       data.descripcion ?? null,
       data.imagen_url ?? null,
@@ -174,15 +178,20 @@ export const updateProduct = async (id, data) => {
   const params = [];
 
   if (data.codigo !== undefined) {
-    const [dup] = await pool.execute(
-      'SELECT id FROM productos WHERE codigo = ? AND id != ? LIMIT 1',
-      [data.codigo, id]
-    );
-    if (dup.length) {
-      throw new AppError('Ya existe un producto con ese código', 409);
+    const codigo = data.codigo ?? null;
+
+    if (codigo) {
+      const [dup] = await pool.execute(
+        'SELECT id FROM productos WHERE codigo = ? AND id != ? LIMIT 1',
+        [codigo, id]
+      );
+      if (dup.length) {
+        throw new AppError('Ya existe un producto con ese código', 409);
+      }
     }
+
     updates.push('codigo = ?');
-    params.push(data.codigo);
+    params.push(codigo);
   }
 
   if (data.nombre !== undefined) {

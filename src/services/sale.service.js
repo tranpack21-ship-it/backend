@@ -136,7 +136,7 @@ export const createSale = async (data, usuarioId, ip = null) => {
 
       lineItems.push({
         producto_id: product.id,
-        producto_codigo: product.codigo,
+        producto_codigo: product.codigo ?? '',
         producto_nombre: product.nombre,
         cantidad,
         precio_unitario: precioUnitario,
