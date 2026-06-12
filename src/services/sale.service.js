@@ -20,6 +20,10 @@ import {
   MIXED_PAYMENT_CODE,
   resolveAndValidatePayments,
 } from '../utils/salePayments.js';
+import {
+  inventoryQtyFromLine,
+  resolveSaleLinePricing,
+} from '../utils/productPricing.js';
 
 const computePuedeAnular = (venta, openSessionId) => {
   if (venta.estado !== 'completada') return false;
@@ -70,6 +74,8 @@ const mapSaleDetail = (row) => ({
   producto_nombre: row.producto_nombre,
   producto_codigo: row.producto_codigo,
   cantidad: Number(row.cantidad),
+  modo_venta: row.modo_venta ?? 'suelto',
+  cantidad_inventario: Number(row.cantidad_inventario ?? row.cantidad),
   precio_unitario: Number(row.precio_unitario),
   descuento: Number(row.descuento),
   subtotal: Number(row.subtotal),
@@ -102,7 +108,8 @@ export const createSale = async (data, usuarioId, ip = null) => {
 
     for (const item of data.items) {
       const [products] = await conn.execute(
-        `SELECT id, codigo, nombre, precio_venta, stock, estado
+        `SELECT id, codigo, nombre, precio_venta, precio_venta_paquete, unidades_por_paquete,
+                stock, estado
          FROM productos WHERE id = ? LIMIT 1`,
         [item.producto_id]
       );
@@ -112,14 +119,10 @@ export const createSale = async (data, usuarioId, ip = null) => {
       }
 
       const product = products[0];
-      const cantidad = Number(item.cantidad);
-
-      const precioUnitario =
-        item.precio_unitario !== undefined
-          ? Number(item.precio_unitario)
-          : Number(product.precio_venta);
+      const pricing = resolveSaleLinePricing(product, item);
       const descuentoLinea = Number(item.descuento ?? 0);
-      const subtotalLinea = precioUnitario * cantidad - descuentoLinea;
+      const subtotalLinea =
+        pricing.precio_unitario * pricing.cantidad - descuentoLinea;
 
       if (subtotalLinea < 0) {
         throw new AppError('El descuento de línea no puede superar el subtotal', 400);
@@ -129,8 +132,10 @@ export const createSale = async (data, usuarioId, ip = null) => {
         producto_id: product.id,
         producto_codigo: product.codigo ?? '',
         producto_nombre: product.nombre,
-        cantidad,
-        precio_unitario: precioUnitario,
+        cantidad: pricing.cantidad,
+        modo_venta: pricing.modo_venta,
+        cantidad_inventario: pricing.cantidad_inventario,
+        precio_unitario: pricing.precio_unitario,
         descuento: descuentoLinea,
         subtotal: subtotalLinea,
       });
@@ -180,14 +185,17 @@ export const createSale = async (data, usuarioId, ip = null) => {
       await conn.execute(
         `INSERT INTO venta_detalle (
           venta_id, producto_id, producto_nombre, producto_codigo,
-          cantidad, precio_unitario, descuento, subtotal
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          cantidad, modo_venta, cantidad_inventario,
+          precio_unitario, descuento, subtotal
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           ventaId,
           line.producto_id,
           line.producto_nombre,
           line.producto_codigo,
           line.cantidad,
+          line.modo_venta,
+          line.cantidad_inventario,
           line.precio_unitario,
           line.descuento,
           line.subtotal,
@@ -198,7 +206,7 @@ export const createSale = async (data, usuarioId, ip = null) => {
         {
           producto_id: line.producto_id,
           tipo: 'salida',
-          cantidad: line.cantidad,
+          cantidad: line.cantidad_inventario,
           motivo: `Venta ${numero}`,
           referencia: numero,
         },
@@ -440,7 +448,7 @@ export const cancelSale = async (id, usuarioId, ip = null) => {
         {
           producto_id: line.producto_id,
           tipo: 'entrada',
-          cantidad: line.cantidad,
+          cantidad: inventoryQtyFromLine(line),
           motivo: `Anulación venta ${venta.numero}`,
           referencia: venta.numero,
         },

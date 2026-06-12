@@ -10,6 +10,7 @@ const emptyToNull = (val) => {
 const lineItemSchema = z.object({
   producto_id: z.coerce.number().int().positive(),
   cantidad: z.coerce.number().positive('Cantidad debe ser mayor a 0'),
+  modo_venta: z.enum(['suelto', 'paquete']).optional().default('suelto'),
   precio_unitario: z.coerce.number().min(0).optional(),
   descuento: z.coerce.number().min(0).optional().default(0),
 });

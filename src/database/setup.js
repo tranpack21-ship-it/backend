@@ -116,6 +116,55 @@ export const applySchemaPatches = async (connection) => {
       );
   `);
   log('✓ caja_movimientos — ventas históricas sin movimiento registrado');
+
+  const [prodCols] = await connection.query(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'productos'
+       AND COLUMN_NAME IN ('precio_venta_paquete', 'unidades_por_paquete')`
+  );
+  const prodColSet = new Set(prodCols.map((r) => r.COLUMN_NAME));
+
+  if (!prodColSet.has('precio_venta_paquete')) {
+    await connection.query(`
+      ALTER TABLE productos
+        ADD COLUMN precio_venta_paquete DECIMAL(12, 2) NULL DEFAULT NULL AFTER precio_venta;
+    `);
+  }
+  if (!prodColSet.has('unidades_por_paquete')) {
+    await connection.query(`
+      ALTER TABLE productos
+        ADD COLUMN unidades_por_paquete DECIMAL(12, 3) NOT NULL DEFAULT 1.000 AFTER precio_venta_paquete;
+    `);
+  }
+  log('✓ productos — precio suelto / paquete');
+
+  const [detCols] = await connection.query(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'venta_detalle'
+       AND COLUMN_NAME IN ('modo_venta', 'cantidad_inventario')`
+  );
+  const detColSet = new Set(detCols.map((r) => r.COLUMN_NAME));
+
+  if (!detColSet.has('modo_venta')) {
+    await connection.query(`
+      ALTER TABLE venta_detalle
+        ADD COLUMN modo_venta ENUM('suelto', 'paquete') NOT NULL DEFAULT 'suelto' AFTER cantidad;
+    `);
+  }
+  if (!detColSet.has('cantidad_inventario')) {
+    await connection.query(`
+      ALTER TABLE venta_detalle
+        ADD COLUMN cantidad_inventario DECIMAL(12, 3) NULL AFTER modo_venta;
+    `);
+    await connection.query(`
+      UPDATE venta_detalle SET cantidad_inventario = cantidad WHERE cantidad_inventario IS NULL;
+    `);
+    await connection.query(`
+      ALTER TABLE venta_detalle
+        MODIFY COLUMN cantidad_inventario DECIMAL(12, 3) NOT NULL;
+    `);
+  }
+  log('✓ venta_detalle — modo de venta y cantidad de inventario');
 };
 
 const seedAdmin = async (connection) => {

@@ -50,23 +50,42 @@ const codigoSchema = z.preprocess(
     .optional()
 );
 
-export const createProductSchema = z.object({
-  codigo: codigoSchema,
-  nombre: z.string().min(2).max(150).trim(),
-  descripcion: z.string().max(2000).optional().nullable(),
-  imagen_url: optionalUrlSchema,
-  color: optionalText(50),
-  talle: optionalText(30),
-  categoria_id: z.coerce.number().int().positive('Seleccione una categoría'),
-  precio_venta: precioSchema,
-  precio_costo: precioSchema.optional().default(0),
-  stock: stockSchema.optional().default(0),
-  stock_minimo: stockSchema.optional().default(0),
-  unidad_medida: z.enum(UNIDADES_MEDIDA, {
-    errorMap: () => ({ message: 'Unidad de medida no válida' }),
-  }),
-  estado: z.enum(['activo', 'inactivo']).optional().default('activo'),
-});
+const optionalPaquetePrecio = z.preprocess(
+  emptyToNull,
+  z.union([z.null(), precioSchema]).optional()
+);
+
+export const createProductSchema = z
+  .object({
+    codigo: codigoSchema,
+    nombre: z.string().min(2).max(150).trim(),
+    descripcion: z.string().max(2000).optional().nullable(),
+    imagen_url: optionalUrlSchema,
+    color: optionalText(50),
+    talle: optionalText(30),
+    categoria_id: z.coerce.number().int().positive('Seleccione una categoría'),
+    precio_venta: precioSchema,
+    precio_venta_paquete: optionalPaquetePrecio,
+    unidades_por_paquete: stockSchema.optional().default(1),
+    precio_costo: precioSchema.optional().default(0),
+    stock: stockSchema.optional().default(0),
+    stock_minimo: stockSchema.optional().default(0),
+    unidad_medida: z.enum(UNIDADES_MEDIDA, {
+      errorMap: () => ({ message: 'Unidad de medida no válida' }),
+    }),
+    estado: z.enum(['activo', 'inactivo']).optional().default('activo'),
+  })
+  .superRefine((data, ctx) => {
+    if (data.precio_venta_paquete != null && Number(data.precio_venta_paquete) > 0) {
+      if (Number(data.unidades_por_paquete) <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Indique cuántas unidades trae el paquete',
+          path: ['unidades_por_paquete'],
+        });
+      }
+    }
+  });
 
 export const updateProductSchema = z
   .object({
@@ -78,11 +97,25 @@ export const updateProductSchema = z
     talle: optionalText(30),
     categoria_id: z.coerce.number().int().positive().optional(),
     precio_venta: precioSchema.optional(),
+    precio_venta_paquete: optionalPaquetePrecio,
+    unidades_por_paquete: stockSchema.optional(),
     precio_costo: precioSchema.optional(),
     stock: stockSchema.optional(),
     stock_minimo: stockSchema.optional(),
     unidad_medida: z.enum(UNIDADES_MEDIDA).optional(),
     estado: z.enum(['activo', 'inactivo']).optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.precio_venta_paquete != null && Number(data.precio_venta_paquete) > 0) {
+      const units = data.unidades_por_paquete ?? 1;
+      if (Number(units) <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Indique cuántas unidades trae el paquete',
+          path: ['unidades_por_paquete'],
+        });
+      }
+    }
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: 'Debe enviar al menos un campo para actualizar',

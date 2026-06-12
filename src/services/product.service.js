@@ -13,6 +13,9 @@ const mapProduct = (row) => ({
   categoria_id: row.categoria_id,
   categoria_nombre: row.categoria_nombre,
   precio_venta: Number(row.precio_venta),
+  precio_venta_paquete:
+    row.precio_venta_paquete != null ? Number(row.precio_venta_paquete) : null,
+  unidades_por_paquete: Number(row.unidades_por_paquete ?? 1),
   precio_costo: Number(row.precio_costo),
   stock: Number(row.stock),
   stock_minimo: Number(row.stock_minimo),
@@ -27,7 +30,8 @@ const baseSelect = `
   SELECT p.id, p.codigo, p.nombre, p.descripcion,
          p.imagen_url, p.color, p.talle,
          p.categoria_id, c.nombre AS categoria_nombre,
-         p.precio_venta, p.precio_costo, p.stock, p.stock_minimo,
+         p.precio_venta, p.precio_venta_paquete, p.unidades_por_paquete,
+         p.precio_costo, p.stock, p.stock_minimo,
          p.unidad_medida, p.estado, p.fecha_creacion, p.fecha_actualizacion
   FROM productos p
   INNER JOIN categorias c ON c.id = p.categoria_id
@@ -148,9 +152,10 @@ export const createProduct = async (data) => {
   const [result] = await pool.execute(
     `INSERT INTO productos (
       codigo, nombre, descripcion, imagen_url, color, talle, categoria_id,
-      precio_venta, precio_costo, stock, stock_minimo,
+      precio_venta, precio_venta_paquete, unidades_por_paquete,
+      precio_costo, stock, stock_minimo,
       unidad_medida, estado
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       codigo,
       data.nombre,
@@ -160,6 +165,8 @@ export const createProduct = async (data) => {
       data.talle ?? null,
       data.categoria_id,
       data.precio_venta,
+      data.precio_venta_paquete ?? null,
+      data.unidades_por_paquete ?? 1,
       data.precio_costo ?? 0,
       data.stock ?? 0,
       data.stock_minimo ?? 0,
@@ -228,6 +235,16 @@ export const updateProduct = async (id, data) => {
   if (data.precio_venta !== undefined) {
     updates.push('precio_venta = ?');
     params.push(data.precio_venta);
+  }
+
+  if (data.precio_venta_paquete !== undefined) {
+    updates.push('precio_venta_paquete = ?');
+    params.push(data.precio_venta_paquete);
+  }
+
+  if (data.unidades_por_paquete !== undefined) {
+    updates.push('unidades_por_paquete = ?');
+    params.push(data.unidades_por_paquete);
   }
 
   if (data.precio_costo !== undefined) {
