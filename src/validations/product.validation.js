@@ -68,6 +68,7 @@ export const createProductSchema = z
     precio_venta_paquete: optionalPaquetePrecio,
     unidades_por_paquete: stockSchema.optional().default(1),
     precio_costo: precioSchema.optional().default(0),
+    stock: stockSchema.optional().default(0),
     stock_minimo: stockSchema.optional().default(0),
     unidad_medida: z.enum(UNIDADES_MEDIDA, {
       errorMap: () => ({ message: 'Unidad de medida no válida' }),

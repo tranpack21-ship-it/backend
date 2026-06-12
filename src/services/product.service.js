@@ -172,7 +172,7 @@ export const createProduct = async (data) => {
       data.precio_venta_paquete ?? null,
       data.unidades_por_paquete ?? 1,
       data.precio_costo ?? 0,
-      0,
+      data.stock ?? 0,
       data.stock_minimo ?? 0,
       data.unidad_medida,
       data.estado,
