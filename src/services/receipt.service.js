@@ -152,6 +152,7 @@ export const listReceipts = async (query) => {
     `SELECT COUNT(*) AS total
      FROM comprobantes c
      INNER JOIN ventas v ON v.id = c.venta_id
+     LEFT JOIN clientes cl ON cl.id = v.cliente_id
      WHERE ${whereClause}`,
     params
   );
