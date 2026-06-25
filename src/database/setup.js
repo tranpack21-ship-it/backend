@@ -173,6 +173,80 @@ export const applySchemaPatches = async (connection) => {
     );
   }
   log('✓ venta_detalle — modo de venta y cantidad de inventario');
+
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS presupuestos (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      numero VARCHAR(30) NOT NULL,
+      cliente_id INT UNSIGNED DEFAULT NULL,
+      usuario_id INT UNSIGNED NOT NULL,
+      subtotal DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+      descuento DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+      total DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+      estado ENUM('vigente', 'anulado', 'convertido') NOT NULL DEFAULT 'vigente',
+      validez_dias INT UNSIGNED NOT NULL DEFAULT 15,
+      validez_hasta DATE DEFAULT NULL,
+      observaciones TEXT DEFAULT NULL,
+      venta_id INT UNSIGNED DEFAULT NULL,
+      fecha_presupuesto TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      fecha_actualizacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_presupuestos_numero (numero),
+      KEY idx_presupuestos_cliente (cliente_id),
+      KEY idx_presupuestos_usuario (usuario_id),
+      KEY idx_presupuestos_estado (estado),
+      KEY idx_presupuestos_fecha (fecha_presupuesto),
+      CONSTRAINT fk_presupuestos_cliente FOREIGN KEY (cliente_id) REFERENCES clientes (id) ON DELETE SET NULL,
+      CONSTRAINT fk_presupuestos_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios (id),
+      CONSTRAINT fk_presupuestos_venta FOREIGN KEY (venta_id) REFERENCES ventas (id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS presupuesto_detalle (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      presupuesto_id INT UNSIGNED NOT NULL,
+      producto_id INT UNSIGNED NOT NULL,
+      producto_nombre VARCHAR(150) NOT NULL,
+      producto_codigo VARCHAR(50) NOT NULL DEFAULT '',
+      cantidad DECIMAL(12, 3) NOT NULL,
+      modo_venta ENUM('suelto', 'paquete') NOT NULL DEFAULT 'suelto',
+      precio_unitario DECIMAL(12, 2) NOT NULL,
+      descuento DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+      subtotal DECIMAL(12, 2) NOT NULL,
+      PRIMARY KEY (id),
+      KEY idx_presupuesto_detalle_presupuesto (presupuesto_id),
+      KEY idx_presupuesto_detalle_producto (producto_id),
+      CONSTRAINT fk_presupuesto_detalle_presupuesto FOREIGN KEY (presupuesto_id) REFERENCES presupuestos (id) ON DELETE CASCADE,
+      CONSTRAINT fk_presupuesto_detalle_producto FOREIGN KEY (producto_id) REFERENCES productos (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+  log('✓ presupuestos — tablas de presupuestos');
+
+  await connection.query(`
+    INSERT INTO permisos (codigo, modulo, descripcion) VALUES
+      ('presupuestos.ver', 'presupuestos', 'Ver presupuestos'),
+      ('presupuestos.crear', 'presupuestos', 'Crear presupuestos'),
+      ('presupuestos.anular', 'presupuestos', 'Anular presupuestos'),
+      ('presupuestos.convertir', 'presupuestos', 'Convertir presupuestos a venta')
+    ON DUPLICATE KEY UPDATE descripcion = VALUES(descripcion);
+  `);
+  log('✓ permisos — módulo presupuestos');
+
+  const [estadoCol] = await connection.query(
+    `SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'presupuestos' AND COLUMN_NAME = 'estado'
+     LIMIT 1`
+  );
+  const estadoType = estadoCol[0]?.COLUMN_TYPE ?? '';
+  if (estadoType && !estadoType.includes('convertido')) {
+    await connection.query(
+      `ALTER TABLE presupuestos
+         MODIFY COLUMN estado ENUM('vigente', 'anulado', 'convertido') NOT NULL DEFAULT 'vigente'`
+    );
+  }
+  log('✓ presupuestos — estado convertido');
 };
 
 const seedAdmin = async (connection) => {

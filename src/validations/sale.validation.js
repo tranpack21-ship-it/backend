@@ -41,6 +41,7 @@ export const createSaleSchema = z.object({
   ),
   tipo_comprobante: z.enum(TIPOS_COMPROBANTE).optional().default('ticket'),
   requiere_caja: z.coerce.boolean().optional().default(false),
+  presupuesto_id: z.coerce.number().int().positive().optional(),
   pagos: z.array(salePaymentLineSchema).min(1).max(10).optional(),
   items: z.array(lineItemSchema).min(1, 'Debe incluir al menos un producto'),
 });

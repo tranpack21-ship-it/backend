@@ -24,6 +24,7 @@ import {
   inventoryQtyFromLine,
   resolveSaleLinePricing,
 } from '../utils/productPricing.js';
+import { linkQuoteToSale, lockQuoteForConversion } from './quote.service.js';
 
 const computePuedeAnular = (venta, openSessionId) => {
   if (venta.estado !== 'completada') return false;
@@ -92,11 +93,32 @@ const generateSaleNumber = async (conn) => {
 };
 
 export const createSale = async (data, usuarioId, ip = null) => {
+  const presupuestoId = data.presupuesto_id ? Number(data.presupuesto_id) : null;
+
   return withTransaction(async (conn) => {
-    if (data.cliente_id) {
+    let saleData = { ...data };
+
+    if (presupuestoId) {
+      const quote = await lockQuoteForConversion(presupuestoId, conn);
+      saleData = {
+        ...saleData,
+        cliente_id: quote.cliente_id,
+        descuento: Number(quote.descuento),
+        observaciones: quote.observaciones,
+        items: quote.detalle.map((line) => ({
+          producto_id: line.producto_id,
+          cantidad: Number(line.cantidad),
+          modo_venta: line.modo_venta ?? 'suelto',
+          precio_unitario: Number(line.precio_unitario),
+          descuento: Number(line.descuento ?? 0),
+        })),
+      };
+    }
+
+    if (saleData.cliente_id) {
       const [client] = await conn.execute(
         "SELECT id FROM clientes WHERE id = ? AND estado = 'activo' LIMIT 1",
-        [data.cliente_id]
+        [saleData.cliente_id]
       );
       if (!client.length) throw new AppError('Cliente no válido o inactivo', 400);
     }
@@ -106,7 +128,7 @@ export const createSale = async (data, usuarioId, ip = null) => {
     const lineItems = [];
     let subtotal = 0;
 
-    for (const item of data.items) {
+    for (const item of saleData.items) {
       const [products] = await conn.execute(
         `SELECT id, codigo, nombre, precio_venta, precio_venta_paquete, unidades_por_paquete,
                 stock, estado
@@ -143,16 +165,16 @@ export const createSale = async (data, usuarioId, ip = null) => {
       subtotal += subtotalLinea;
     }
 
-    const descuentoGlobal = Number(data.descuento ?? 0);
+    const descuentoGlobal = Number(saleData.descuento ?? 0);
     if (descuentoGlobal > subtotal) {
       throw new AppError('El descuento global no puede superar el subtotal', 400);
     }
 
     const total = subtotal - descuentoGlobal;
 
-    const payments = await resolveAndValidatePayments(data, total, conn);
+    const payments = await resolveAndValidatePayments(saleData, total, conn);
 
-    if (data.requiere_caja && payments.needsCashSession && !openSession) {
+    if (saleData.requiere_caja && payments.needsCashSession && !openSession) {
       throw new AppError('Debe abrir la caja antes de registrar ventas', 400);
     }
 
@@ -166,7 +188,7 @@ export const createSale = async (data, usuarioId, ip = null) => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         numero,
-        data.cliente_id ?? null,
+        saleData.cliente_id ?? null,
         usuarioId,
         subtotal,
         descuentoGlobal,
@@ -175,7 +197,7 @@ export const createSale = async (data, usuarioId, ip = null) => {
         payments.headerMontoRecibido,
         payments.headerVuelto,
         cajaSesionId,
-        data.observaciones ?? null,
+        saleData.observaciones ?? null,
       ]
     );
 
@@ -234,7 +256,7 @@ export const createSale = async (data, usuarioId, ip = null) => {
 
       if (pago.paymentMethod.genera_cargo_cc) {
         await registerSaleCharge(
-          { clienteId: data.cliente_id, ventaId, numero, total: pago.monto },
+          { clienteId: saleData.cliente_id, ventaId, numero, total: pago.monto },
           usuarioId,
           conn
         );
@@ -242,19 +264,24 @@ export const createSale = async (data, usuarioId, ip = null) => {
     }
 
     await createReceiptForSale(
-      { ventaId, tipo: data.tipo_comprobante ?? 'ticket' },
+      { ventaId, tipo: saleData.tipo_comprobante ?? 'ticket' },
       conn
     );
 
+    if (presupuestoId) {
+      await linkQuoteToSale(presupuestoId, ventaId, usuarioId, conn, ip);
+    }
+
     await logAudit({
       usuarioId,
-      accion: 'venta.crear',
-      modulo: 'ventas',
+      accion: presupuestoId ? 'presupuesto.convertir_venta' : 'venta.crear',
+      modulo: presupuestoId ? 'presupuestos' : 'ventas',
       detalle: {
         venta_id: ventaId,
         numero,
         total,
         metodo_pago: payments.summaryCode,
+        presupuesto_id: presupuestoId ?? undefined,
         pagos: payments.lines.map((p) => ({
           metodo_pago: p.metodo_pago,
           monto: p.monto,
