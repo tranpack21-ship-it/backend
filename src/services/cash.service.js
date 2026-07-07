@@ -84,13 +84,14 @@ export const getSessionBreakdown = async (sesionId, connection = null) => {
     `SELECT vp.metodo_pago,
             COALESCE(mp.nombre, vp.metodo_pago) AS nombre,
             COALESCE(mp.genera_cargo_cc, 0) AS genera_cargo_cc,
+            COALESCE(mp.requiere_monto_recibido, 0) AS requiere_monto_recibido,
             COUNT(*) AS cantidad,
             COALESCE(SUM(vp.monto), 0) AS total
      FROM venta_pagos vp
      INNER JOIN ventas v ON v.id = vp.venta_id
      LEFT JOIN metodos_pago mp ON mp.codigo = vp.metodo_pago
      WHERE v.caja_sesion_id = ? AND v.estado = 'completada'
-     GROUP BY vp.metodo_pago, mp.nombre, mp.genera_cargo_cc
+     GROUP BY vp.metodo_pago, mp.nombre, mp.genera_cargo_cc, mp.requiere_monto_recibido
      ORDER BY total DESC`,
     [sesionId]
   );
@@ -99,13 +100,14 @@ export const getSessionBreakdown = async (sesionId, connection = null) => {
     `SELECT m.tipo,
             COALESCE(m.metodo_pago, 'efectivo') AS metodo_pago,
             COALESCE(mp.nombre, m.metodo_pago, 'Efectivo') AS nombre,
+            COALESCE(mp.requiere_monto_recibido, 0) AS requiere_monto_recibido,
             COALESCE(SUM(m.monto), 0) AS total,
             COUNT(*) AS cantidad
      FROM caja_movimientos m
      LEFT JOIN metodos_pago mp ON mp.codigo = m.metodo_pago
      WHERE m.sesion_id = ?
        AND m.tipo IN ('venta', 'cobro_cc', 'ingreso', 'egreso', 'anulacion')
-     GROUP BY m.tipo, m.metodo_pago, mp.nombre`,
+     GROUP BY m.tipo, m.metodo_pago, mp.nombre, mp.requiere_monto_recibido`,
     [sesionId]
   );
 
@@ -174,6 +176,46 @@ export const getSessionBreakdown = async (sesionId, connection = null) => {
     .filter((r) => r.tipo === 'egreso')
     .reduce((acc, r) => acc + Number(r.total), 0);
 
+  // --- Desglose del efectivo físico del cajón (solo métodos que lo afectan) ---
+  const afectaEfectivo = (metodo, requiere) =>
+    Boolean(Number(requiere)) || metodo === 'efectivo';
+
+  const toEfectivoItem = (r) => ({
+    metodo_pago: r.metodo_pago,
+    nombre: r.nombre,
+    total: Number(r.total),
+    cantidad: Number(r.cantidad),
+  });
+
+  const ventasEfectivoPorMetodo = ventasRows
+    .filter((r) => afectaEfectivo(r.metodo_pago, r.requiere_monto_recibido))
+    .map(toEfectivoItem);
+
+  const cobrosEfectivoPorMetodo = movRows
+    .filter((r) => r.tipo === 'cobro_cc' && afectaEfectivo(r.metodo_pago, r.requiere_monto_recibido))
+    .map(toEfectivoItem);
+
+  const ingresosManualesEfectivoPorMetodo = movRows
+    .filter((r) => r.tipo === 'ingreso' && afectaEfectivo(r.metodo_pago, r.requiere_monto_recibido))
+    .map(toEfectivoItem);
+
+  const egresosEfectivoPorMetodo = movRows
+    .filter((r) => r.tipo === 'egreso' && afectaEfectivo(r.metodo_pago, r.requiere_monto_recibido))
+    .map(toEfectivoItem);
+
+  const sumTotal = (arr) => arr.reduce((acc, r) => acc + r.total, 0);
+
+  const efectivoDesglose = {
+    ventas_por_metodo: ventasEfectivoPorMetodo,
+    total_ventas: sumTotal(ventasEfectivoPorMetodo),
+    cobros_por_metodo: cobrosEfectivoPorMetodo,
+    total_cobros: sumTotal(cobrosEfectivoPorMetodo),
+    ingresos_manuales_por_metodo: ingresosManualesEfectivoPorMetodo,
+    total_ingresos_manuales: sumTotal(ingresosManualesEfectivoPorMetodo),
+    egresos_por_metodo: egresosEfectivoPorMetodo,
+    total_egresos: sumTotal(egresosEfectivoPorMetodo),
+  };
+
   return {
     ventas_por_metodo: ventasPorMetodo,
     ingresos_por_metodo: ingresosPorMetodo,
@@ -186,6 +228,7 @@ export const getSessionBreakdown = async (sesionId, connection = null) => {
     total_ingresos: totalIngresos,
     total_ingresos_manuales: totalIngresosManuales,
     total_egresos: totalEgresos,
+    efectivo_desglose: efectivoDesglose,
   };
 };
 
