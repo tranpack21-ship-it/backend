@@ -38,11 +38,20 @@ const mapMovement = (row) => ({
   fecha: row.fecha,
 });
 
+/**
+ * Efectivo físico esperado en el cajón.
+ *
+ * `total_ventas_efectivo` ya es el neto de TODO el efectivo del turno:
+ * ventas + ingresos manuales + cobros CC en efectivo (suman) y egresos
+ * en efectivo (restan). Por eso solo hay que sumarle la apertura.
+ *
+ * NO se suma `total_ingresos` ni se resta `total_egresos` porque son
+ * contadores generales (incluyen métodos no-efectivo) y su parte en
+ * efectivo ya está reflejada en `total_ventas_efectivo`. Sumarlos
+ * duplicaba los cobros CC e ingresos en efectivo.
+ */
 const computeEfectivoFisico = (sesion) =>
-  sesion.monto_apertura +
-  sesion.total_ventas_efectivo +
-  sesion.total_ingresos -
-  sesion.total_egresos;
+  sesion.monto_apertura + sesion.total_ventas_efectivo;
 
 /** Solo métodos que suman al efectivo físico del cajón */
 const affectsPhysicalCash = async (metodoPago, conn) => {
@@ -175,6 +184,7 @@ export const getSessionBreakdown = async (sesionId, connection = null) => {
     cobros_cc_por_metodo: cobrosCcPorMetodo,
     total_cobros_cuenta_corriente: totalCobrosCc,
     total_ingresos: totalIngresos,
+    total_ingresos_manuales: totalIngresosManuales,
     total_egresos: totalEgresos,
   };
 };
@@ -365,16 +375,10 @@ export const addMovement = async (sesionId, data, usuarioId, ip = null) => {
       [monto, sesionId]
     );
 
-    if (tipo === 'ingreso' && (await affectsPhysicalCash(metodoPago, conn))) {
+    if (await affectsPhysicalCash(metodoPago, conn)) {
+      const operador = tipo === 'ingreso' ? '+' : '-';
       await conn.execute(
-        'UPDATE caja_sesiones SET total_ventas_efectivo = total_ventas_efectivo + ? WHERE id = ?',
-        [monto, sesionId]
-      );
-    }
-
-    if (tipo === 'egreso') {
-      await conn.execute(
-        'UPDATE caja_sesiones SET total_ventas_efectivo = total_ventas_efectivo - ? WHERE id = ?',
+        `UPDATE caja_sesiones SET total_ventas_efectivo = total_ventas_efectivo ${operador} ? WHERE id = ?`,
         [monto, sesionId]
       );
     }
