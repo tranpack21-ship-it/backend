@@ -375,7 +375,11 @@ export const registerPayment = async (
 
     return getClientAccount(clienteId);
   } catch (err) {
-    await conn.rollback();
+    try {
+      await conn.rollback();
+    } catch (rollbackErr) {
+      console.error('[cuentaCorriente.registerPayment] rollback falló:', rollbackErr?.message);
+    }
     throw err;
   } finally {
     conn.release();
@@ -442,7 +446,11 @@ export const registerAdjustment = async (
 
     return getClientAccount(clienteId);
   } catch (err) {
-    await conn.rollback();
+    try {
+      await conn.rollback();
+    } catch (rollbackErr) {
+      console.error('[cuentaCorriente.registerAdjustment] rollback falló:', rollbackErr?.message);
+    }
     throw err;
   } finally {
     conn.release();

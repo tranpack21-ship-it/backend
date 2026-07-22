@@ -30,8 +30,15 @@ export const errorHandler = (err, req, res, _next) => {
     message = 'Origen no permitido';
   }
 
-  if (env.NODE_ENV === 'development' && statusCode === 500) {
+  // Errores de negocio (4xx): log corto. 5xx: log completo.
+  if (statusCode >= 500) {
     console.error('[Error]', err);
+  } else if (env.NODE_ENV === 'development') {
+    console.warn(`[${statusCode}] ${message}`);
+  }
+
+  if (res.headersSent) {
+    return;
   }
 
   res.status(statusCode).json({

@@ -8,7 +8,11 @@ export const withTransaction = async (callback) => {
     await connection.commit();
     return result;
   } catch (error) {
-    await connection.rollback();
+    try {
+      await connection.rollback();
+    } catch (rollbackErr) {
+      console.error('[withTransaction] rollback falló:', rollbackErr?.message || rollbackErr);
+    }
     throw error;
   } finally {
     connection.release();
