@@ -116,6 +116,7 @@ export const getReceiptWithSaleDetail = async (ventaId) => {
       producto_nombre: d.producto_nombre,
       producto_codigo: d.producto_codigo,
       cantidad: Number(d.cantidad),
+      modo_venta: d.modo_venta ?? 'suelto',
       precio_unitario: Number(d.precio_unitario),
       descuento: Number(d.descuento),
       subtotal: Number(d.subtotal),
