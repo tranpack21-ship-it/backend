@@ -69,18 +69,32 @@ const mapSaleList = (row, openSessionId = null) => ({
   ),
 });
 
-const mapSaleDetail = (row) => ({
-  id: row.id,
-  producto_id: row.producto_id,
-  producto_nombre: row.producto_nombre,
-  producto_codigo: row.producto_codigo,
-  cantidad: Number(row.cantidad),
-  modo_venta: row.modo_venta ?? 'suelto',
-  cantidad_inventario: Number(row.cantidad_inventario ?? row.cantidad),
-  precio_unitario: Number(row.precio_unitario),
-  descuento: Number(row.descuento),
-  subtotal: Number(row.subtotal),
-});
+const mapSaleDetail = (row) => {
+  const cantidad = Number(row.cantidad);
+  const modo = row.modo_venta ?? 'suelto';
+  const cantidadInventario = Number(row.cantidad_inventario ?? row.cantidad);
+  const unidadesPorPaquete =
+    modo === 'paquete' && cantidad > 0
+      ? cantidadInventario / cantidad
+      : row.unidades_por_paquete != null
+        ? Number(row.unidades_por_paquete)
+        : null;
+
+  return {
+    id: row.id,
+    producto_id: row.producto_id,
+    producto_nombre: row.producto_nombre,
+    producto_codigo: row.producto_codigo,
+    cantidad,
+    modo_venta: modo,
+    cantidad_inventario: cantidadInventario,
+    unidades_por_paquete: unidadesPorPaquete,
+    unidad_medida: row.unidad_medida || 'uds',
+    precio_unitario: Number(row.precio_unitario),
+    descuento: Number(row.descuento),
+    subtotal: Number(row.subtotal),
+  };
+};
 
 const generateSaleNumber = async (conn) => {
   const year = new Date().getFullYear();
@@ -315,7 +329,11 @@ export const getSaleById = async (id, connection = null, usuarioId = null) => {
   if (!sales.length) throw new AppError('Venta no encontrada', 404);
 
   const [details] = await conn.execute(
-    'SELECT * FROM venta_detalle WHERE venta_id = ? ORDER BY id ASC',
+    `SELECT d.*, p.unidad_medida, p.unidades_por_paquete
+     FROM venta_detalle d
+     LEFT JOIN productos p ON p.id = d.producto_id
+     WHERE d.venta_id = ?
+     ORDER BY d.id ASC`,
     [id]
   );
 

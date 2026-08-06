@@ -28,17 +28,31 @@ const mapQuoteList = (row) => ({
   puede_convertir: row.estado === 'vigente' && !row.venta_id,
 });
 
-const mapQuoteDetail = (row) => ({
-  id: row.id,
-  producto_id: row.producto_id,
-  producto_nombre: row.producto_nombre,
-  producto_codigo: row.producto_codigo,
-  cantidad: Number(row.cantidad),
-  modo_venta: row.modo_venta ?? 'suelto',
-  precio_unitario: Number(row.precio_unitario),
-  descuento: Number(row.descuento),
-  subtotal: Number(row.subtotal),
-});
+const mapQuoteDetail = (row) => {
+  const cantidad = Number(row.cantidad);
+  const modo = row.modo_venta ?? 'suelto';
+  const unidadesPorPaquete =
+    row.unidades_por_paquete != null ? Number(row.unidades_por_paquete) : null;
+  const cantidadInventario =
+    modo === 'paquete' && unidadesPorPaquete != null && unidadesPorPaquete > 0
+      ? cantidad * unidadesPorPaquete
+      : cantidad;
+
+  return {
+    id: row.id,
+    producto_id: row.producto_id,
+    producto_nombre: row.producto_nombre,
+    producto_codigo: row.producto_codigo,
+    cantidad,
+    modo_venta: modo,
+    unidades_por_paquete: unidadesPorPaquete,
+    cantidad_inventario: cantidadInventario,
+    unidad_medida: row.unidad_medida || 'uds',
+    precio_unitario: Number(row.precio_unitario),
+    descuento: Number(row.descuento),
+    subtotal: Number(row.subtotal),
+  };
+};
 
 const generateQuoteNumber = async (conn) => {
   const year = new Date().getFullYear();
@@ -187,7 +201,13 @@ export const getQuoteById = async (id, connection = null) => {
   if (!rows.length) throw new AppError('Presupuesto no encontrado', 404);
 
   const [details] = await conn.execute(
-    'SELECT * FROM presupuesto_detalle WHERE presupuesto_id = ? ORDER BY id ASC',
+    `SELECT d.*,
+            p.unidades_por_paquete,
+            p.unidad_medida
+     FROM presupuesto_detalle d
+     LEFT JOIN productos p ON p.id = d.producto_id
+     WHERE d.presupuesto_id = ?
+     ORDER BY d.id ASC`,
     [id]
   );
 

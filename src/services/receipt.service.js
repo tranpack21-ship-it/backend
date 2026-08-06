@@ -74,7 +74,11 @@ export const getReceiptWithSaleDetail = async (ventaId) => {
   if (!receiptRows.length) throw new AppError('Comprobante no encontrado', 404);
 
   const [details] = await pool.execute(
-    'SELECT * FROM venta_detalle WHERE venta_id = ? ORDER BY id ASC',
+    `SELECT d.*, p.unidad_medida, p.unidades_por_paquete
+     FROM venta_detalle d
+     LEFT JOIN productos p ON p.id = d.producto_id
+     WHERE d.venta_id = ?
+     ORDER BY d.id ASC`,
     [ventaId]
   );
 
@@ -112,15 +116,28 @@ export const getReceiptWithSaleDetail = async (ventaId) => {
       numero_documento: r.numero_documento,
       vendedor: r.vendedor,
     },
-    detalle: details.map((d) => ({
-      producto_nombre: d.producto_nombre,
-      producto_codigo: d.producto_codigo,
-      cantidad: Number(d.cantidad),
-      modo_venta: d.modo_venta ?? 'suelto',
-      precio_unitario: Number(d.precio_unitario),
-      descuento: Number(d.descuento),
-      subtotal: Number(d.subtotal),
-    })),
+    detalle: details.map((d) => {
+      const cantidad = Number(d.cantidad);
+      const modo = d.modo_venta ?? 'suelto';
+      const cantidadInventario = Number(d.cantidad_inventario ?? d.cantidad);
+      return {
+        producto_nombre: d.producto_nombre,
+        producto_codigo: d.producto_codigo,
+        cantidad,
+        modo_venta: modo,
+        cantidad_inventario: cantidadInventario,
+        unidades_por_paquete:
+          modo === 'paquete' && cantidad > 0
+            ? cantidadInventario / cantidad
+            : d.unidades_por_paquete != null
+              ? Number(d.unidades_por_paquete)
+              : null,
+        unidad_medida: d.unidad_medida || 'uds',
+        precio_unitario: Number(d.precio_unitario),
+        descuento: Number(d.descuento),
+        subtotal: Number(d.subtotal),
+      };
+    }),
   };
 };
 
