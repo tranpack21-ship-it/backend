@@ -20,6 +20,7 @@ const mapMovement = (row) => ({
   referencia: row.referencia,
   observaciones: row.observaciones,
   metodo_cobro: row.metodo_cobro,
+  metodo_cobro_nombre: row.metodo_cobro_nombre ?? row.metodo_cobro,
   caja_sesion_id: row.caja_sesion_id,
   usuario_id: row.usuario_id,
   usuario_nombre: row.usuario_nombre,
@@ -263,10 +264,12 @@ export const listMovements = async (clienteId, { page, limit }) => {
   const total = countRows[0].total;
 
   const [rows] = await pool.execute(
-    `SELECT m.*, u.nombre_usuario AS usuario_nombre, v.numero AS venta_numero
+    `SELECT m.*, u.nombre_usuario AS usuario_nombre, v.numero AS venta_numero,
+            mp.nombre AS metodo_cobro_nombre
      FROM cuenta_corriente_movimientos m
      INNER JOIN usuarios u ON u.id = m.usuario_id
      LEFT JOIN ventas v ON v.id = m.venta_id
+     LEFT JOIN metodos_pago mp ON mp.codigo = m.metodo_cobro
      WHERE m.cliente_id = ?
      ORDER BY m.fecha DESC, m.id DESC
      ${sqlLimitOffset(limit, offset)}`,
@@ -279,25 +282,62 @@ export const listMovements = async (clienteId, { page, limit }) => {
   };
 };
 
-export const registerPayment = async (
-  clienteId,
-  { monto, observaciones, metodo_cobro },
-  usuarioId,
-  ip = null
-) => {
-  const amount = Number(monto);
+const normalizePaymentLines = (data) => {
+  if (Array.isArray(data.pagos) && data.pagos.length > 0) {
+    return data.pagos.map((p) => ({
+      metodo_cobro: String(p.metodo_cobro || 'efectivo').trim().toLowerCase(),
+      monto: Number(p.monto),
+    }));
+  }
+
+  return [
+    {
+      metodo_cobro: String(data.metodo_cobro || 'efectivo').trim().toLowerCase(),
+      monto: Number(data.monto),
+    },
+  ];
+};
+
+export const registerPayment = async (clienteId, data, usuarioId, ip = null) => {
+  const lines = normalizePaymentLines(data);
+
+  if (lines.length < 1 || lines.length > 2) {
+    throw new AppError('Puede usar 1 o 2 métodos de cobro', 400);
+  }
+
+  for (const line of lines) {
+    if (!Number.isFinite(line.monto) || line.monto <= 0) {
+      throw new AppError('Cada monto de cobro debe ser mayor a 0', 400);
+    }
+  }
+
+  const amount = Math.round(lines.reduce((acc, l) => acc + l.monto, 0) * 100) / 100;
   if (amount <= 0) throw new AppError('El monto del cobro debe ser mayor a 0', 400);
 
-  const metodoCodigo = (metodo_cobro || 'efectivo').trim().toLowerCase();
+  const codes = lines.map((l) => l.metodo_cobro);
+  if (new Set(codes).size !== codes.length) {
+    throw new AppError('Los métodos de cobro deben ser distintos', 400);
+  }
 
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
 
-    const paymentMethod = await getActivePaymentMethodByCode(metodoCodigo, conn);
-    const openSession = await getOpenSessionForUser(usuarioId, conn);
+    const resolvedMethods = [];
+    for (const line of lines) {
+      const paymentMethod = await getActivePaymentMethodByCode(line.metodo_cobro, conn);
+      if (paymentMethod.genera_cargo_cc) {
+        throw new AppError(
+          'No se puede cobrar cuenta corriente con un método que genera cargo a CC',
+          400
+        );
+      }
+      resolvedMethods.push(paymentMethod);
+    }
 
-    if (paymentMethod.registra_en_caja && !openSession) {
+    const openSession = await getOpenSessionForUser(usuarioId, conn);
+    const needsCash = resolvedMethods.some((m) => m.registra_en_caja);
+    if (needsCash && !openSession) {
       throw new AppError(
         'Debe abrir la caja antes de registrar cobros que ingresan al arqueo',
         400
@@ -311,50 +351,70 @@ export const registerPayment = async (
       throw new AppError('El cliente no tiene saldo pendiente en cuenta corriente', 400);
     }
 
-    if (amount > saldoAnterior) {
+    if (amount > saldoAnterior + 0.009) {
       throw new AppError(
         `El cobro no puede superar el saldo pendiente (${saldoAnterior})`,
         400
       );
     }
 
-    const saldoPosterior = saldoAnterior - amount;
+    const saldoPosterior = Math.round((saldoAnterior - amount) * 100) / 100;
 
     await conn.execute(
       'UPDATE clientes SET saldo_cuenta_corriente = ? WHERE id = ?',
       [saldoPosterior, clienteId]
     );
 
-    const obsParts = [observaciones?.trim(), `Medio: ${paymentMethod.nombre}`].filter(Boolean);
-    const obs = obsParts.join(' — ') || 'Cobro registrado';
+    const refBase = `COBRO-${clienteId}-${Date.now()}`;
+    const mediosLabel = resolvedMethods.map((m) => m.nombre).join(' + ');
+    const userObs = data.observaciones?.trim() || '';
+    const createdIds = [];
+    let runningAnterior = saldoAnterior;
 
-    const ccMovId = await insertMovement(conn, {
-      clienteId,
-      tipo: 'pago',
-      monto: amount,
-      saldoAnterior,
-      saldoPosterior,
-      ventaId: null,
-      referencia: `COBRO-${clienteId}-${Date.now()}`,
-      observaciones: obs,
-      metodoCobro: metodoCodigo,
-      cajaSesionId: openSession?.id ?? null,
-      usuarioId,
-    });
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      const method = resolvedMethods[i];
+      const runningPosterior = Math.round((runningAnterior - line.monto) * 100) / 100;
+      const referencia = lines.length > 1 ? `${refBase}-${i + 1}` : refBase;
+      const obsParts = [
+        userObs || null,
+        lines.length > 1
+          ? `Cobro mixto (${i + 1}/${lines.length}): ${method.nombre}`
+          : `Medio: ${method.nombre}`,
+      ].filter(Boolean);
 
-    if (openSession) {
-      await registerCcPaymentInCash(
-        {
-          sesionId: openSession.id,
-          monto: amount,
-          metodoPago: metodoCodigo,
-          ccMovimientoId: ccMovId,
-          clienteNombre: client.nombre,
-          referencia: `CC-${clienteId}`,
-        },
+      const ccMovId = await insertMovement(conn, {
+        clienteId,
+        tipo: 'pago',
+        monto: line.monto,
+        saldoAnterior: runningAnterior,
+        saldoPosterior: runningPosterior,
+        ventaId: null,
+        referencia,
+        observaciones: obsParts.join(' — ') || 'Cobro registrado',
+        metodoCobro: line.metodo_cobro,
+        cajaSesionId: openSession?.id ?? null,
         usuarioId,
-        conn
-      );
+      });
+
+      createdIds.push(ccMovId);
+
+      if (openSession) {
+        await registerCcPaymentInCash(
+          {
+            sesionId: openSession.id,
+            monto: line.monto,
+            metodoPago: line.metodo_cobro,
+            ccMovimientoId: ccMovId,
+            clienteNombre: client.nombre,
+            referencia: refBase,
+          },
+          usuarioId,
+          conn
+        );
+      }
+
+      runningAnterior = runningPosterior;
     }
 
     await conn.commit();
@@ -366,7 +426,10 @@ export const registerPayment = async (
       detalle: {
         cliente_id: clienteId,
         monto: amount,
-        metodo_cobro: metodoCodigo,
+        metodos: lines.map((l) => ({ metodo_cobro: l.metodo_cobro, monto: l.monto })),
+        medios: mediosLabel,
+        referencia: refBase,
+        movimientos_ids: createdIds,
         caja_sesion_id: openSession?.id,
         saldo_posterior: saldoPosterior,
       },
