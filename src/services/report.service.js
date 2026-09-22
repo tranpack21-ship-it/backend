@@ -200,3 +200,208 @@ export const getSalesByUserReport = async ({ fecha_desde, fecha_hasta }) => {
     total: Number(r.total),
   }));
 };
+
+const buildCashDateFilter = (fecha_desde, fecha_hasta, alias = 'm') => {
+  const conditions = [];
+  const params = [];
+  if (fecha_desde) {
+    conditions.push(`DATE(${alias}.fecha) >= ?`);
+    params.push(fecha_desde);
+  }
+  if (fecha_hasta) {
+    conditions.push(`DATE(${alias}.fecha) <= ?`);
+    params.push(fecha_hasta);
+  }
+  return { conditions, params };
+};
+
+/** Egresos de caja del período (gastos operativos registrados) */
+export const getExpensesReport = async ({ fecha_desde, fecha_hasta }) => {
+  const { conditions, params } = buildCashDateFilter(fecha_desde, fecha_hasta);
+  const whereParts = ["m.tipo = 'egreso'", ...conditions];
+  const whereClause = whereParts.join(' AND ');
+
+  const [summaryRows] = await pool.execute(
+    `SELECT COUNT(*) AS cantidad, COALESCE(SUM(m.monto), 0) AS total
+     FROM caja_movimientos m
+     WHERE ${whereClause}`,
+    params
+  );
+
+  const [byDay] = await pool.execute(
+    `SELECT DATE(m.fecha) AS fecha,
+            COUNT(*) AS cantidad,
+            COALESCE(SUM(m.monto), 0) AS total
+     FROM caja_movimientos m
+     WHERE ${whereClause}
+     GROUP BY DATE(m.fecha)
+     ORDER BY fecha ASC`,
+    params
+  );
+
+  const [byMethod] = await pool.execute(
+    `SELECT COALESCE(m.metodo_pago, 'efectivo') AS metodo_pago,
+            COALESCE(mp.nombre, m.metodo_pago, 'Efectivo') AS metodo_pago_nombre,
+            COUNT(*) AS cantidad,
+            COALESCE(SUM(m.monto), 0) AS total
+     FROM caja_movimientos m
+     LEFT JOIN metodos_pago mp ON mp.codigo = m.metodo_pago
+     WHERE ${whereClause}
+     GROUP BY m.metodo_pago, mp.nombre
+     ORDER BY total DESC`,
+    params
+  );
+
+  const [detail] = await pool.execute(
+    `SELECT m.id, m.fecha, m.monto, m.descripcion,
+            COALESCE(m.metodo_pago, 'efectivo') AS metodo_pago,
+            COALESCE(mp.nombre, m.metodo_pago, 'Efectivo') AS metodo_pago_nombre,
+            u.nombre_usuario AS usuario_nombre,
+            s.id AS sesion_id
+     FROM caja_movimientos m
+     LEFT JOIN metodos_pago mp ON mp.codigo = m.metodo_pago
+     INNER JOIN usuarios u ON u.id = m.usuario_id
+     LEFT JOIN caja_sesiones s ON s.id = m.sesion_id
+     WHERE ${whereClause}
+     ORDER BY m.fecha DESC, m.id DESC
+     LIMIT 100`,
+    params
+  );
+
+  const total = Number(summaryRows[0].total);
+  const cantidad = Number(summaryRows[0].cantidad);
+
+  return {
+    resumen: {
+      cantidad,
+      total,
+      promedio: cantidad > 0 ? total / cantidad : 0,
+    },
+    por_dia: byDay.map((r) => ({
+      fecha: r.fecha,
+      cantidad: Number(r.cantidad),
+      total: Number(r.total),
+    })),
+    por_metodo: byMethod.map((r) => ({
+      metodo_pago: r.metodo_pago,
+      metodo_pago_nombre: r.metodo_pago_nombre,
+      cantidad: Number(r.cantidad),
+      total: Number(r.total),
+    })),
+    detalle: detail.map((r) => ({
+      id: r.id,
+      fecha: r.fecha,
+      monto: Number(r.monto),
+      descripcion: r.descripcion || 'Egreso de caja',
+      metodo_pago: r.metodo_pago,
+      metodo_pago_nombre: r.metodo_pago_nombre,
+      usuario_nombre: r.usuario_nombre,
+      sesion_id: r.sesion_id,
+    })),
+  };
+};
+
+/**
+ * Resultado estimado del período:
+ * Ingresos por ventas − costo de mercadería (aprox.) − egresos de caja
+ */
+export const getResultadoReport = async ({ fecha_desde, fecha_hasta }) => {
+  const saleConditions = ["v.estado = 'completada'"];
+  const saleParams = [];
+  if (fecha_desde) {
+    saleConditions.push('DATE(v.fecha_venta) >= ?');
+    saleParams.push(fecha_desde);
+  }
+  if (fecha_hasta) {
+    saleConditions.push('DATE(v.fecha_venta) <= ?');
+    saleParams.push(fecha_hasta);
+  }
+  const saleWhere = saleConditions.join(' AND ');
+
+  const [ventasRows] = await pool.execute(
+    `SELECT COUNT(*) AS cantidad_ventas,
+            COALESCE(SUM(v.total), 0) AS ingresos
+     FROM ventas v
+     WHERE ${saleWhere}`,
+    saleParams
+  );
+
+  const [cogsRows] = await pool.execute(
+    `SELECT COALESCE(SUM(d.cantidad_inventario * p.precio_costo), 0) AS costo_mercaderia,
+            COALESCE(SUM(CASE WHEN p.precio_costo > 0 THEN d.subtotal ELSE 0 END), 0) AS ingresos_con_costo,
+            COUNT(DISTINCT CASE WHEN p.precio_costo IS NULL OR p.precio_costo <= 0 THEN d.producto_id END) AS productos_sin_costo
+     FROM venta_detalle d
+     INNER JOIN ventas v ON v.id = d.venta_id
+     INNER JOIN productos p ON p.id = d.producto_id
+     WHERE ${saleWhere}`,
+    saleParams
+  );
+
+  const { conditions: egresoConds, params: egresoParams } = buildCashDateFilter(
+    fecha_desde,
+    fecha_hasta
+  );
+  const egresoWhere = ["m.tipo = 'egreso'", ...egresoConds].join(' AND ');
+
+  const [egresoRows] = await pool.execute(
+    `SELECT COUNT(*) AS cantidad, COALESCE(SUM(m.monto), 0) AS total
+     FROM caja_movimientos m
+     WHERE ${egresoWhere}`,
+    egresoParams
+  );
+
+  const { conditions: ingresoConds, params: ingresoParams } = buildCashDateFilter(
+    fecha_desde,
+    fecha_hasta
+  );
+  const ingresoWhere = ["m.tipo = 'ingreso'", ...ingresoConds].join(' AND ');
+
+  const [ingresoCajaRows] = await pool.execute(
+    `SELECT COUNT(*) AS cantidad, COALESCE(SUM(m.monto), 0) AS total
+     FROM caja_movimientos m
+     WHERE ${ingresoWhere}`,
+    ingresoParams
+  );
+
+  const ingresos_ventas = Number(ventasRows[0].ingresos);
+  const cantidad_ventas = Number(ventasRows[0].cantidad_ventas);
+  const costo_mercaderia = Number(cogsRows[0].costo_mercaderia);
+  const egresos_caja = Number(egresoRows[0].total);
+  const ingresos_caja_manuales = Number(ingresoCajaRows[0].total);
+  const cantidad_egresos = Number(egresoRows[0].cantidad);
+  const productos_sin_costo = Number(cogsRows[0].productos_sin_costo);
+
+  const margen_bruto = ingresos_ventas - costo_mercaderia;
+  const resultado_neto = margen_bruto - egresos_caja + ingresos_caja_manuales;
+  const margen_bruto_pct =
+    ingresos_ventas > 0 ? Math.round((margen_bruto / ingresos_ventas) * 1000) / 10 : 0;
+  const resultado_pct =
+    ingresos_ventas > 0 ? Math.round((resultado_neto / ingresos_ventas) * 1000) / 10 : 0;
+
+  return {
+    ingresos_ventas,
+    cantidad_ventas,
+    costo_mercaderia,
+    margen_bruto,
+    margen_bruto_pct,
+    egresos_caja,
+    cantidad_egresos,
+    ingresos_caja_manuales,
+    resultado_neto,
+    resultado_pct,
+    productos_sin_costo,
+    costo_aproximado: true,
+    desglose: [
+      { concepto: 'Ingresos por ventas', monto: ingresos_ventas, tipo: 'ingreso' },
+      { concepto: 'Costo de mercadería (estimado)', monto: -costo_mercaderia, tipo: 'costo' },
+      { concepto: 'Margen bruto', monto: margen_bruto, tipo: 'subtotal' },
+      { concepto: 'Egresos de caja', monto: -egresos_caja, tipo: 'egreso' },
+      {
+        concepto: 'Ingresos manuales de caja',
+        monto: ingresos_caja_manuales,
+        tipo: 'ingreso_caja',
+      },
+      { concepto: 'Resultado neto estimado', monto: resultado_neto, tipo: 'resultado' },
+    ],
+  };
+};

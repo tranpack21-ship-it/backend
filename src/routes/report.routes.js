@@ -31,5 +31,15 @@ router.get(
   validate(reportDateRangeSchema, 'query'),
   reportController.salesByUser
 );
+router.get(
+  '/expenses',
+  validate(reportDateRangeSchema, 'query'),
+  reportController.expenses
+);
+router.get(
+  '/resultado',
+  validate(reportDateRangeSchema, 'query'),
+  reportController.resultado
+);
 
 export default router;
