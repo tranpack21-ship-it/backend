@@ -485,7 +485,14 @@ export const getComprasMercaderiaReport = async ({
     cashQueryParams
   );
 
-  const invConds = ["m.tipo = 'entrada'", '(m.motivo = ? OR m.motivo LIKE ?)'];
+  // Entradas directas + ajustes que aumentaron stock (mismo motivo canónico)
+  const invConds = [
+    `(
+       m.tipo = 'entrada'
+       OR (m.tipo = 'ajuste' AND m.stock_posterior > m.stock_anterior)
+     )`,
+    '(m.motivo = ? OR m.motivo LIKE ?)',
+  ];
   const invParams = [conceptoNombre, `${conceptoNombre} — %`];
   if (fecha_desde) {
     invConds.push('DATE(m.fecha) >= ?');
@@ -497,10 +504,16 @@ export const getComprasMercaderiaReport = async ({
   }
   const invWhere = invConds.join(' AND ');
 
+  // Unidades/valor: en entrada = cantidad; en ajuste alcista = stock_posterior - stock_anterior
+  const unidadesExpr = `CASE
+    WHEN m.tipo = 'ajuste' THEN (m.stock_posterior - m.stock_anterior)
+    ELSE m.cantidad
+  END`;
+
   const [entradaSummary] = await pool.execute(
     `SELECT COUNT(*) AS cantidad,
-            COALESCE(SUM(m.cantidad), 0) AS unidades,
-            COALESCE(SUM(m.cantidad * COALESCE(p.precio_costo, 0)), 0) AS valor_costo,
+            COALESCE(SUM(${unidadesExpr}), 0) AS unidades,
+            COALESCE(SUM((${unidadesExpr}) * COALESCE(p.precio_costo, 0)), 0) AS valor_costo,
             COUNT(DISTINCT CASE
               WHEN p.precio_costo IS NULL OR p.precio_costo <= 0 THEN p.id
             END) AS productos_sin_costo
@@ -511,13 +524,15 @@ export const getComprasMercaderiaReport = async ({
   );
 
   const [entradaDetalle] = await pool.execute(
-    `SELECT m.id, m.fecha, m.cantidad, m.motivo,
+    `SELECT m.id, m.fecha, m.tipo, m.cantidad, m.motivo,
+            m.stock_anterior, m.stock_posterior,
+            (${unidadesExpr}) AS unidades,
             p.id AS producto_id,
             p.nombre AS producto_nombre,
             p.codigo AS producto_codigo,
             p.unidad_medida,
             COALESCE(p.precio_costo, 0) AS precio_costo,
-            (m.cantidad * COALESCE(p.precio_costo, 0)) AS valor_costo,
+            ((${unidadesExpr}) * COALESCE(p.precio_costo, 0)) AS valor_costo,
             u.nombre_usuario AS usuario_nombre
      FROM movimientos_inventario m
      INNER JOIN productos p ON p.id = m.producto_id
@@ -542,7 +557,7 @@ export const getComprasMercaderiaReport = async ({
   const [porDiaEntradas] = await pool.execute(
     `SELECT DATE(m.fecha) AS fecha,
             COUNT(*) AS cantidad,
-            COALESCE(SUM(m.cantidad * COALESCE(p.precio_costo, 0)), 0) AS total
+            COALESCE(SUM((${unidadesExpr}) * COALESCE(p.precio_costo, 0)), 0) AS total
      FROM movimientos_inventario m
      INNER JOIN productos p ON p.id = m.producto_id
      WHERE ${invWhere}
@@ -582,7 +597,8 @@ export const getComprasMercaderiaReport = async ({
     detalle_entradas: entradaDetalle.map((r) => ({
       id: r.id,
       fecha: r.fecha,
-      cantidad: Number(r.cantidad),
+      tipo: r.tipo,
+      cantidad: Number(r.unidades ?? r.cantidad),
       motivo: r.motivo,
       producto_id: r.producto_id,
       producto_nombre: r.producto_nombre,
