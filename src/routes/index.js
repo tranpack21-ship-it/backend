@@ -14,6 +14,7 @@ import receiptRoutes from './receipt.routes.js';
 import auditRoutes from './audit.routes.js';
 import cuentaCorrienteRoutes from './cuentaCorriente.routes.js';
 import paymentMethodRoutes from './paymentMethod.routes.js';
+import cashConceptRoutes from './cashConcept.routes.js';
 import healthRoutes from './health.routes.js';
 import alertRoutes from './alert.routes.js';
 
@@ -37,5 +38,6 @@ router.use('/receipts', receiptRoutes);
 router.use('/audit', auditRoutes);
 router.use('/cuenta-corriente', cuentaCorrienteRoutes);
 router.use('/payment-methods', paymentMethodRoutes);
+router.use('/cash-concepts', cashConceptRoutes);
 
 export default router;

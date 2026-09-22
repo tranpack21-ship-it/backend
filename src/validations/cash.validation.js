@@ -15,7 +15,11 @@ export const cashMovementSchema = z.object({
   tipo: z.enum(['ingreso', 'egreso']),
   monto: z.coerce.number().positive('El monto debe ser mayor a 0'),
   metodo_pago: z.string().min(1).max(50).trim().optional().default('efectivo'),
-  descripcion: z.string().max(255).optional().nullable(),
+  descripcion: z
+    .string()
+    .min(1, 'Seleccione o indique una descripción')
+    .max(255)
+    .trim(),
 });
 
 export const listCashSessionsSchema = withDateRangeRefine(

@@ -334,6 +334,23 @@ CREATE TABLE IF NOT EXISTS cuenta_corriente_movimientos (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ------------------------------------------------------------
+-- Conceptos de ingreso/egreso de caja (catálogo configurable)
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS caja_conceptos (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  nombre VARCHAR(100) NOT NULL,
+  tipo ENUM('ingreso', 'egreso', 'ambos') NOT NULL DEFAULT 'egreso',
+  orden INT NOT NULL DEFAULT 0,
+  estado ENUM('activo', 'inactivo') NOT NULL DEFAULT 'activo',
+  fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  fecha_actualizacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_caja_conceptos_nombre (nombre),
+  KEY idx_caja_conceptos_tipo (tipo),
+  KEY idx_caja_conceptos_estado (estado)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
 -- Movimientos de caja
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS caja_movimientos (
@@ -445,7 +462,9 @@ INSERT INTO permisos (codigo, modulo, descripcion) VALUES
   ('reportes.ver', 'reportes', 'Ver reportes y estadísticas'),
   ('auditoria.ver', 'auditoria', 'Ver registro de auditoría'),
   ('metodos_pago.ver', 'metodos_pago', 'Ver métodos de pago activos'),
-  ('metodos_pago.gestionar', 'metodos_pago', 'Configurar métodos de pago')
+  ('metodos_pago.gestionar', 'metodos_pago', 'Configurar métodos de pago'),
+  ('caja_conceptos.ver', 'caja_conceptos', 'Ver conceptos de ingreso/egreso'),
+  ('caja_conceptos.gestionar', 'caja_conceptos', 'Configurar conceptos de ingreso/egreso')
 ON DUPLICATE KEY UPDATE descripcion = VALUES(descripcion);
 
 INSERT INTO categorias (nombre, descripcion, estado) VALUES
@@ -471,5 +490,15 @@ ON DUPLICATE KEY UPDATE
   registra_en_caja = VALUES(registra_en_caja),
   genera_cargo_cc = VALUES(genera_cargo_cc),
   orden = VALUES(orden);
+
+INSERT INTO caja_conceptos (nombre, tipo, orden, estado) VALUES
+  ('Sueldos', 'egreso', 1, 'activo'),
+  ('Compra de mercadería', 'egreso', 2, 'activo'),
+  ('Alquiler', 'egreso', 3, 'activo'),
+  ('Servicios (luz, agua, internet)', 'egreso', 4, 'activo'),
+  ('Gastos varios', 'egreso', 5, 'activo'),
+  ('Aporte de capital', 'ingreso', 1, 'activo'),
+  ('Otros ingresos', 'ingreso', 2, 'activo')
+ON DUPLICATE KEY UPDATE tipo = VALUES(tipo), orden = VALUES(orden);
 
 -- Usuario admin: lo crea setup.js con ADMIN_PASSWORD

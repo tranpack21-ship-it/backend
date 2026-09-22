@@ -247,6 +247,44 @@ export const applySchemaPatches = async (connection) => {
     );
   }
   log('✓ presupuestos — estado convertido');
+
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS caja_conceptos (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      nombre VARCHAR(100) NOT NULL,
+      tipo ENUM('ingreso', 'egreso', 'ambos') NOT NULL DEFAULT 'egreso',
+      orden INT NOT NULL DEFAULT 0,
+      estado ENUM('activo', 'inactivo') NOT NULL DEFAULT 'activo',
+      fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      fecha_actualizacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_caja_conceptos_nombre (nombre),
+      KEY idx_caja_conceptos_tipo (tipo),
+      KEY idx_caja_conceptos_estado (estado)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+  log('✓ caja_conceptos — catálogo de descripciones');
+
+  await connection.query(`
+    INSERT INTO permisos (codigo, modulo, descripcion) VALUES
+      ('caja_conceptos.ver', 'caja_conceptos', 'Ver conceptos de ingreso/egreso'),
+      ('caja_conceptos.gestionar', 'caja_conceptos', 'Configurar conceptos de ingreso/egreso')
+    ON DUPLICATE KEY UPDATE descripcion = VALUES(descripcion);
+  `);
+  log('✓ permisos — módulo caja_conceptos');
+
+  await connection.query(`
+    INSERT INTO caja_conceptos (nombre, tipo, orden, estado) VALUES
+      ('Sueldos', 'egreso', 1, 'activo'),
+      ('Compra de mercadería', 'egreso', 2, 'activo'),
+      ('Alquiler', 'egreso', 3, 'activo'),
+      ('Servicios (luz, agua, internet)', 'egreso', 4, 'activo'),
+      ('Gastos varios', 'egreso', 5, 'activo'),
+      ('Aporte de capital', 'ingreso', 1, 'activo'),
+      ('Otros ingresos', 'ingreso', 2, 'activo')
+    ON DUPLICATE KEY UPDATE tipo = VALUES(tipo), orden = VALUES(orden);
+  `);
+  log('✓ caja_conceptos — datos iniciales');
 };
 
 const seedAdmin = async (connection) => {

@@ -216,9 +216,17 @@ const buildCashDateFilter = (fecha_desde, fecha_hasta, alias = 'm') => {
 };
 
 /** Egresos de caja del período (gastos operativos registrados) */
-export const getExpensesReport = async ({ fecha_desde, fecha_hasta }) => {
+export const getExpensesReport = async ({ fecha_desde, fecha_hasta, descripcion }) => {
   const { conditions, params } = buildCashDateFilter(fecha_desde, fecha_hasta);
   const whereParts = ["m.tipo = 'egreso'", ...conditions];
+
+  const descFilter = typeof descripcion === 'string' ? descripcion.trim() : '';
+  if (descFilter) {
+    // Coincide exacto o con detalle opcional: "Sueldos — nota"
+    whereParts.push('(m.descripcion = ? OR m.descripcion LIKE ?)');
+    params.push(descFilter, `${descFilter} — %`);
+  }
+
   const whereClause = whereParts.join(' AND ');
 
   const [summaryRows] = await pool.execute(
@@ -252,6 +260,23 @@ export const getExpensesReport = async ({ fecha_desde, fecha_hasta }) => {
     params
   );
 
+  const [byDesc] = await pool.execute(
+    `SELECT COALESCE(
+              NULLIF(TRIM(SUBSTRING_INDEX(COALESCE(m.descripcion, ''), ' — ', 1)), ''),
+              'Sin descripción'
+            ) AS descripcion,
+            COUNT(*) AS cantidad,
+            COALESCE(SUM(m.monto), 0) AS total
+     FROM caja_movimientos m
+     WHERE ${whereClause}
+     GROUP BY COALESCE(
+              NULLIF(TRIM(SUBSTRING_INDEX(COALESCE(m.descripcion, ''), ' — ', 1)), ''),
+              'Sin descripción'
+            )
+     ORDER BY total DESC`,
+    params
+  );
+
   const [detail] = await pool.execute(
     `SELECT m.id, m.fecha, m.monto, m.descripcion,
             COALESCE(m.metodo_pago, 'efectivo') AS metodo_pago,
@@ -276,6 +301,7 @@ export const getExpensesReport = async ({ fecha_desde, fecha_hasta }) => {
       cantidad,
       total,
       promedio: cantidad > 0 ? total / cantidad : 0,
+      filtro_descripcion: descFilter || null,
     },
     por_dia: byDay.map((r) => ({
       fecha: r.fecha,
@@ -285,6 +311,11 @@ export const getExpensesReport = async ({ fecha_desde, fecha_hasta }) => {
     por_metodo: byMethod.map((r) => ({
       metodo_pago: r.metodo_pago,
       metodo_pago_nombre: r.metodo_pago_nombre,
+      cantidad: Number(r.cantidad),
+      total: Number(r.total),
+    })),
+    por_descripcion: byDesc.map((r) => ({
+      descripcion: r.descripcion,
       cantidad: Number(r.cantidad),
       total: Number(r.total),
     })),

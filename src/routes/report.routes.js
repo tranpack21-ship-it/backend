@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import * as reportController from '../controllers/report.controller.js';
 import { validate } from '../middlewares/validate.js';
-import { reportDateRangeSchema } from '../validations/report.validation.js';
+import {
+  reportDateRangeSchema,
+  expensesReportSchema,
+} from '../validations/report.validation.js';
 import { authenticate, authorizePermission } from '../middlewares/auth.js';
 import { PERMISSION_CODES } from '../constants/permissions.js';
 
@@ -33,7 +36,7 @@ router.get(
 );
 router.get(
   '/expenses',
-  validate(reportDateRangeSchema, 'query'),
+  validate(expensesReportSchema, 'query'),
   reportController.expenses
 );
 router.get(
