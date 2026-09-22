@@ -35,3 +35,8 @@ export const resultado = asyncHandler(async (req, res) => {
   const reporte = await reportService.getResultadoReport(req.query);
   res.json({ success: true, data: { reporte } });
 });
+
+export const comprasMercaderia = asyncHandler(async (req, res) => {
+  const reporte = await reportService.getComprasMercaderiaReport(req.query);
+  res.json({ success: true, data: { reporte } });
+});

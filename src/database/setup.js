@@ -285,6 +285,42 @@ export const applySchemaPatches = async (connection) => {
     ON DUPLICATE KEY UPDATE tipo = VALUES(tipo), orden = VALUES(orden);
   `);
   log('✓ caja_conceptos — datos iniciales');
+
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS inventario_motivos (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      nombre VARCHAR(100) NOT NULL,
+      tipo ENUM('entrada', 'salida', 'ambos') NOT NULL DEFAULT 'ambos',
+      orden INT NOT NULL DEFAULT 0,
+      estado ENUM('activo', 'inactivo') NOT NULL DEFAULT 'activo',
+      fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      fecha_actualizacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_inventario_motivos_nombre (nombre),
+      KEY idx_inventario_motivos_tipo (tipo),
+      KEY idx_inventario_motivos_estado (estado)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `);
+  log('✓ inventario_motivos — catálogo de motivos');
+
+  await connection.query(`
+    INSERT INTO permisos (codigo, modulo, descripcion) VALUES
+      ('inventario_motivos.ver', 'inventario_motivos', 'Ver motivos de inventario'),
+      ('inventario_motivos.gestionar', 'inventario_motivos', 'Configurar motivos de inventario')
+    ON DUPLICATE KEY UPDATE descripcion = VALUES(descripcion);
+  `);
+  log('✓ permisos — módulo inventario_motivos');
+
+  await connection.query(`
+    INSERT INTO inventario_motivos (nombre, tipo, orden, estado) VALUES
+      ('Compra de mercadería', 'entrada', 1, 'activo'),
+      ('Merma / rotura', 'salida', 2, 'activo'),
+      ('Devolución a proveedor', 'salida', 3, 'activo'),
+      ('Ajuste de inventario', 'ambos', 4, 'activo'),
+      ('Otros', 'ambos', 99, 'activo')
+    ON DUPLICATE KEY UPDATE tipo = VALUES(tipo), orden = VALUES(orden);
+  `);
+  log('✓ inventario_motivos — datos iniciales');
 };
 
 const seedAdmin = async (connection) => {

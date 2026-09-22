@@ -436,3 +436,172 @@ export const getResultadoReport = async ({ fecha_desde, fecha_hasta }) => {
     ],
   };
 };
+
+/** Nombre canónico alineado entre caja_conceptos e inventario_motivos */
+export const CONCEPTO_COMPRA_MERCADERIA = 'Compra de mercadería';
+
+/**
+ * Conciliación: egresos de caja por compra de mercadería vs
+ * valor de entradas de inventario con el mismo motivo (cantidad × precio_costo).
+ */
+export const getComprasMercaderiaReport = async ({
+  fecha_desde,
+  fecha_hasta,
+  concepto = CONCEPTO_COMPRA_MERCADERIA,
+}) => {
+  const conceptoNombre =
+    typeof concepto === 'string' && concepto.trim()
+      ? concepto.trim()
+      : CONCEPTO_COMPRA_MERCADERIA;
+
+  const { conditions: cashConds, params: cashParams } = buildCashDateFilter(
+    fecha_desde,
+    fecha_hasta
+  );
+  const cashWhere = [
+    "m.tipo = 'egreso'",
+    '(m.descripcion = ? OR m.descripcion LIKE ?)',
+    ...cashConds,
+  ].join(' AND ');
+  const cashQueryParams = [conceptoNombre, `${conceptoNombre} — %`, ...cashParams];
+
+  const [egresoSummary] = await pool.execute(
+    `SELECT COUNT(*) AS cantidad, COALESCE(SUM(m.monto), 0) AS total
+     FROM caja_movimientos m
+     WHERE ${cashWhere}`,
+    cashQueryParams
+  );
+
+  const [egresoDetalle] = await pool.execute(
+    `SELECT m.id, m.fecha, m.monto, m.descripcion,
+            COALESCE(mp.nombre, m.metodo_pago, 'Efectivo') AS metodo_pago_nombre,
+            u.nombre_usuario AS usuario_nombre
+     FROM caja_movimientos m
+     LEFT JOIN metodos_pago mp ON mp.codigo = m.metodo_pago
+     INNER JOIN usuarios u ON u.id = m.usuario_id
+     WHERE ${cashWhere}
+     ORDER BY m.fecha DESC, m.id DESC
+     LIMIT 100`,
+    cashQueryParams
+  );
+
+  const invConds = ["m.tipo = 'entrada'", '(m.motivo = ? OR m.motivo LIKE ?)'];
+  const invParams = [conceptoNombre, `${conceptoNombre} — %`];
+  if (fecha_desde) {
+    invConds.push('DATE(m.fecha) >= ?');
+    invParams.push(fecha_desde);
+  }
+  if (fecha_hasta) {
+    invConds.push('DATE(m.fecha) <= ?');
+    invParams.push(fecha_hasta);
+  }
+  const invWhere = invConds.join(' AND ');
+
+  const [entradaSummary] = await pool.execute(
+    `SELECT COUNT(*) AS cantidad,
+            COALESCE(SUM(m.cantidad), 0) AS unidades,
+            COALESCE(SUM(m.cantidad * COALESCE(p.precio_costo, 0)), 0) AS valor_costo,
+            COUNT(DISTINCT CASE
+              WHEN p.precio_costo IS NULL OR p.precio_costo <= 0 THEN p.id
+            END) AS productos_sin_costo
+     FROM movimientos_inventario m
+     INNER JOIN productos p ON p.id = m.producto_id
+     WHERE ${invWhere}`,
+    invParams
+  );
+
+  const [entradaDetalle] = await pool.execute(
+    `SELECT m.id, m.fecha, m.cantidad, m.motivo,
+            p.id AS producto_id,
+            p.nombre AS producto_nombre,
+            p.codigo AS producto_codigo,
+            p.unidad_medida,
+            COALESCE(p.precio_costo, 0) AS precio_costo,
+            (m.cantidad * COALESCE(p.precio_costo, 0)) AS valor_costo,
+            u.nombre_usuario AS usuario_nombre
+     FROM movimientos_inventario m
+     INNER JOIN productos p ON p.id = m.producto_id
+     LEFT JOIN usuarios u ON u.id = m.usuario_id
+     WHERE ${invWhere}
+     ORDER BY m.fecha DESC, m.id DESC
+     LIMIT 100`,
+    invParams
+  );
+
+  const [porDiaEgresos] = await pool.execute(
+    `SELECT DATE(m.fecha) AS fecha,
+            COUNT(*) AS cantidad,
+            COALESCE(SUM(m.monto), 0) AS total
+     FROM caja_movimientos m
+     WHERE ${cashWhere}
+     GROUP BY DATE(m.fecha)
+     ORDER BY fecha ASC`,
+    cashQueryParams
+  );
+
+  const [porDiaEntradas] = await pool.execute(
+    `SELECT DATE(m.fecha) AS fecha,
+            COUNT(*) AS cantidad,
+            COALESCE(SUM(m.cantidad * COALESCE(p.precio_costo, 0)), 0) AS total
+     FROM movimientos_inventario m
+     INNER JOIN productos p ON p.id = m.producto_id
+     WHERE ${invWhere}
+     GROUP BY DATE(m.fecha)
+     ORDER BY fecha ASC`,
+    invParams
+  );
+
+  const egresos_caja = Number(egresoSummary[0].total);
+  const cantidad_egresos = Number(egresoSummary[0].cantidad);
+  const valor_entradas = Number(entradaSummary[0].valor_costo);
+  const cantidad_entradas = Number(entradaSummary[0].cantidad);
+  const unidades_entradas = Number(entradaSummary[0].unidades);
+  const productos_sin_costo = Number(entradaSummary[0].productos_sin_costo);
+  const diferencia = egresos_caja - valor_entradas;
+  const coinciden = Math.abs(diferencia) < 0.01;
+
+  return {
+    concepto: conceptoNombre,
+    egresos_caja,
+    cantidad_egresos,
+    valor_entradas,
+    cantidad_entradas,
+    unidades_entradas,
+    diferencia,
+    coinciden,
+    productos_sin_costo,
+    costo_aproximado: true,
+    detalle_egresos: egresoDetalle.map((r) => ({
+      id: r.id,
+      fecha: r.fecha,
+      monto: Number(r.monto),
+      descripcion: r.descripcion,
+      metodo_pago_nombre: r.metodo_pago_nombre,
+      usuario_nombre: r.usuario_nombre,
+    })),
+    detalle_entradas: entradaDetalle.map((r) => ({
+      id: r.id,
+      fecha: r.fecha,
+      cantidad: Number(r.cantidad),
+      motivo: r.motivo,
+      producto_id: r.producto_id,
+      producto_nombre: r.producto_nombre,
+      producto_codigo: r.producto_codigo,
+      unidad_medida: r.unidad_medida || 'uds',
+      precio_costo: Number(r.precio_costo),
+      valor_costo: Number(r.valor_costo),
+      usuario_nombre: r.usuario_nombre,
+    })),
+    por_dia_egresos: porDiaEgresos.map((r) => ({
+      fecha: r.fecha,
+      cantidad: Number(r.cantidad),
+      total: Number(r.total),
+    })),
+    por_dia_entradas: porDiaEntradas.map((r) => ({
+      fecha: r.fecha,
+      cantidad: Number(r.cantidad),
+      total: Number(r.total),
+    })),
+  };
+};
+

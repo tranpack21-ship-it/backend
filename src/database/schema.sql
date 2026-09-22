@@ -305,6 +305,23 @@ CREATE TABLE IF NOT EXISTS movimientos_inventario (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ------------------------------------------------------------
+-- Motivos de movimientos de inventario (catálogo configurable)
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS inventario_motivos (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  nombre VARCHAR(100) NOT NULL,
+  tipo ENUM('entrada', 'salida', 'ambos') NOT NULL DEFAULT 'ambos',
+  orden INT NOT NULL DEFAULT 0,
+  estado ENUM('activo', 'inactivo') NOT NULL DEFAULT 'activo',
+  fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  fecha_actualizacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_inventario_motivos_nombre (nombre),
+  KEY idx_inventario_motivos_tipo (tipo),
+  KEY idx_inventario_motivos_estado (estado)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
 -- Cuenta corriente (después de ventas y caja)
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS cuenta_corriente_movimientos (
@@ -464,7 +481,9 @@ INSERT INTO permisos (codigo, modulo, descripcion) VALUES
   ('metodos_pago.ver', 'metodos_pago', 'Ver métodos de pago activos'),
   ('metodos_pago.gestionar', 'metodos_pago', 'Configurar métodos de pago'),
   ('caja_conceptos.ver', 'caja_conceptos', 'Ver conceptos de ingreso/egreso'),
-  ('caja_conceptos.gestionar', 'caja_conceptos', 'Configurar conceptos de ingreso/egreso')
+  ('caja_conceptos.gestionar', 'caja_conceptos', 'Configurar conceptos de ingreso/egreso'),
+  ('inventario_motivos.ver', 'inventario_motivos', 'Ver motivos de inventario'),
+  ('inventario_motivos.gestionar', 'inventario_motivos', 'Configurar motivos de inventario')
 ON DUPLICATE KEY UPDATE descripcion = VALUES(descripcion);
 
 INSERT INTO categorias (nombre, descripcion, estado) VALUES
@@ -499,6 +518,14 @@ INSERT INTO caja_conceptos (nombre, tipo, orden, estado) VALUES
   ('Gastos varios', 'egreso', 5, 'activo'),
   ('Aporte de capital', 'ingreso', 1, 'activo'),
   ('Otros ingresos', 'ingreso', 2, 'activo')
+ON DUPLICATE KEY UPDATE tipo = VALUES(tipo), orden = VALUES(orden);
+
+INSERT INTO inventario_motivos (nombre, tipo, orden, estado) VALUES
+  ('Compra de mercadería', 'entrada', 1, 'activo'),
+  ('Merma / rotura', 'salida', 2, 'activo'),
+  ('Devolución a proveedor', 'salida', 3, 'activo'),
+  ('Ajuste de inventario', 'ambos', 4, 'activo'),
+  ('Otros', 'ambos', 99, 'activo')
 ON DUPLICATE KEY UPDATE tipo = VALUES(tipo), orden = VALUES(orden);
 
 -- Usuario admin: lo crea setup.js con ADMIN_PASSWORD

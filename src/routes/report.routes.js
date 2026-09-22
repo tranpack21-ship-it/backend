@@ -4,6 +4,7 @@ import { validate } from '../middlewares/validate.js';
 import {
   reportDateRangeSchema,
   expensesReportSchema,
+  comprasMercaderiaReportSchema,
 } from '../validations/report.validation.js';
 import { authenticate, authorizePermission } from '../middlewares/auth.js';
 import { PERMISSION_CODES } from '../constants/permissions.js';
@@ -43,6 +44,11 @@ router.get(
   '/resultado',
   validate(reportDateRangeSchema, 'query'),
   reportController.resultado
+);
+router.get(
+  '/compras-mercaderia',
+  validate(comprasMercaderiaReportSchema, 'query'),
+  reportController.comprasMercaderia
 );
 
 export default router;

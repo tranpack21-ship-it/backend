@@ -16,3 +16,11 @@ export const expensesReportSchema = withDateRangeRefine(
     descripcion: z.string().max(100).trim().optional().default(''),
   })
 );
+
+export const comprasMercaderiaReportSchema = withDateRangeRefine(
+  z.object({
+    fecha_desde: optionalDateFilter,
+    fecha_hasta: optionalDateFilter,
+    concepto: z.string().max(100).trim().optional().default('Compra de mercadería'),
+  })
+);
