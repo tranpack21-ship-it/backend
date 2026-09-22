@@ -42,8 +42,8 @@ const mapMovement = (row) => ({
  * Efectivo físico esperado en el cajón.
  *
  * `total_ventas_efectivo` ya es el neto de TODO el efectivo del turno:
- * ventas + ingresos manuales + cobros CC en efectivo (suman) y egresos
- * en efectivo (restan). Por eso solo hay que sumarle la apertura.
+ * ventas + ingresos manuales + cobros CC en efectivo (suman) y egresos /
+ * anulaciones en efectivo (restan). Por eso solo hay que sumarle la apertura.
  *
  * NO se suma `total_ingresos` ni se resta `total_egresos` porque son
  * contadores generales (incluyen métodos no-efectivo) y su parte en
@@ -90,10 +90,26 @@ export const getSessionBreakdown = async (sesionId, connection = null) => {
      FROM venta_pagos vp
      INNER JOIN ventas v ON v.id = vp.venta_id
      LEFT JOIN metodos_pago mp ON mp.codigo = vp.metodo_pago
-     WHERE v.caja_sesion_id = ? AND v.estado = 'completada'
+     WHERE v.caja_sesion_id = ?
+       AND (
+         v.estado = 'completada'
+         OR (
+           v.estado = 'anulada'
+           AND EXISTS (
+             SELECT 1 FROM caja_movimientos mv
+             WHERE mv.venta_id = v.id AND mv.tipo = 'venta'
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM caja_movimientos ma
+             WHERE ma.venta_id = v.id
+               AND ma.sesion_id = ?
+               AND ma.tipo = 'anulacion'
+           )
+         )
+       )
      GROUP BY vp.metodo_pago, mp.nombre, mp.genera_cargo_cc, mp.requiere_monto_recibido
      ORDER BY total DESC`,
-    [sesionId]
+    [sesionId, sesionId]
   );
 
   const [movRows] = await conn.execute(
@@ -170,6 +186,18 @@ export const getSessionBreakdown = async (sesionId, connection = null) => {
     .filter((r) => r.tipo === 'ingreso')
     .reduce((acc, r) => acc + Number(r.total), 0);
 
+  const anulacionesPorMetodo = movRows
+    .filter((r) => r.tipo === 'anulacion')
+    .map((r) => ({
+      metodo_pago: r.metodo_pago,
+      nombre: r.nombre,
+      total: Number(r.total),
+      cantidad: Number(r.cantidad),
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  const totalAnulaciones = anulacionesPorMetodo.reduce((acc, r) => acc + r.total, 0);
+
   const totalIngresos = totalVentasEnCaja + totalCobrosCc + totalIngresosManuales;
 
   const totalEgresos = movRows
@@ -203,6 +231,12 @@ export const getSessionBreakdown = async (sesionId, connection = null) => {
     .filter((r) => r.tipo === 'egreso' && afectaEfectivo(r.metodo_pago, r.requiere_monto_recibido))
     .map(toEfectivoItem);
 
+  const anulacionesEfectivoPorMetodo = movRows
+    .filter(
+      (r) => r.tipo === 'anulacion' && afectaEfectivo(r.metodo_pago, r.requiere_monto_recibido)
+    )
+    .map(toEfectivoItem);
+
   const sumTotal = (arr) => arr.reduce((acc, r) => acc + r.total, 0);
 
   const efectivoDesglose = {
@@ -214,12 +248,15 @@ export const getSessionBreakdown = async (sesionId, connection = null) => {
     total_ingresos_manuales: sumTotal(ingresosManualesEfectivoPorMetodo),
     egresos_por_metodo: egresosEfectivoPorMetodo,
     total_egresos: sumTotal(egresosEfectivoPorMetodo),
+    anulaciones_por_metodo: anulacionesEfectivoPorMetodo,
+    total_anulaciones: sumTotal(anulacionesEfectivoPorMetodo),
   };
 
   return {
     ventas_por_metodo: ventasPorMetodo,
     ingresos_por_metodo: ingresosPorMetodo,
     egresos_por_metodo: egresosPorMetodo,
+    anulaciones_por_metodo: anulacionesPorMetodo,
     total_ventas: totalVentas,
     total_ventas_en_caja: totalVentasEnCaja,
     total_ventas_cuenta_corriente: totalVentasCc,
@@ -228,6 +265,7 @@ export const getSessionBreakdown = async (sesionId, connection = null) => {
     total_ingresos: totalIngresos,
     total_ingresos_manuales: totalIngresosManuales,
     total_egresos: totalEgresos,
+    total_anulaciones: totalAnulaciones,
     efectivo_desglose: efectivoDesglose,
   };
 };
@@ -463,7 +501,7 @@ export const registerSaleInCash = async (
 };
 
 export const reverseSaleInCash = async (
-  { sesionId, ventaId, numero, monto, metodoPago },
+  { sesionId, ventaId, numero, monto, metodoPago, descripcion },
   usuarioId,
   conn
 ) => {
@@ -471,11 +509,12 @@ export const reverseSaleInCash = async (
 
   const codigo = metodoPago || 'efectivo';
   const amount = Number(monto);
+  const desc = descripcion || `Anulación ${numero}`;
 
   await conn.execute(
     `INSERT INTO caja_movimientos (sesion_id, tipo, monto, metodo_pago, descripcion, referencia, venta_id, usuario_id)
      VALUES (?, 'anulacion', ?, ?, ?, ?, ?, ?)`,
-    [sesionId, amount, codigo, `Anulación ${numero}`, numero, ventaId, usuarioId]
+    [sesionId, amount, codigo, desc, numero, ventaId, usuarioId]
   );
 
   if (await affectsPhysicalCash(codigo, conn)) {

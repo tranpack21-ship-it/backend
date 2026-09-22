@@ -26,48 +26,60 @@ import {
 } from '../utils/productPricing.js';
 import { linkQuoteToSale, lockQuoteForConversion } from './quote.service.js';
 
+/**
+ * Se puede anular si la venta está completada y:
+ * - no impactó caja (sin sesión), o
+ * - el usuario tiene un turno de caja abierto (el reverso se asienta ahí,
+ *   aunque la venta sea de otro turno ya cerrado).
+ */
 const computePuedeAnular = (venta, openSessionId) => {
   if (venta.estado !== 'completada') return false;
   if (!venta.caja_sesion_id) return true;
-  if (!openSessionId) return false;
-  return (
-    venta.caja_sesion_id === openSessionId && venta.caja_sesion_estado === 'abierta'
-  );
+  return Boolean(openSessionId);
 };
 
-const mapSaleList = (row, openSessionId = null) => ({
-  id: row.id,
-  numero: row.numero,
-  cliente_id: row.cliente_id,
-  cliente_nombre: row.cliente_nombre,
-  usuario_id: row.usuario_id,
-  usuario_nombre: row.usuario_nombre,
-  subtotal: Number(row.subtotal),
-  descuento: Number(row.descuento),
-  total: Number(row.total),
-  metodo_pago: row.metodo_pago,
-  metodo_pago_nombre:
-    row.metodo_pago === MIXED_PAYMENT_CODE
-      ? 'Pago combinado'
-      : row.metodo_pago_nombre ?? row.metodo_pago,
-  monto_recibido: row.monto_recibido != null ? Number(row.monto_recibido) : null,
-  vuelto: row.vuelto != null ? Number(row.vuelto) : null,
-  caja_sesion_id: row.caja_sesion_id,
-  caja_sesion_estado: row.caja_sesion_estado ?? null,
-  estado: row.estado,
-  observaciones: row.observaciones,
-  fecha_venta: row.fecha_venta,
-  total_items: Number(row.total_items ?? 0),
-  comprobante_numero: row.comprobante_numero,
-  puede_anular: computePuedeAnular(
-    {
-      estado: row.estado,
-      caja_sesion_id: row.caja_sesion_id,
-      caja_sesion_estado: row.caja_sesion_estado,
-    },
-    openSessionId
-  ),
-});
+const mapSaleList = (row, openSessionId = null) => {
+  const base = {
+    estado: row.estado,
+    caja_sesion_id: row.caja_sesion_id,
+    caja_sesion_estado: row.caja_sesion_estado,
+  };
+  const puede_anular = computePuedeAnular(base, openSessionId);
+  const anulacion_otro_turno = Boolean(
+    puede_anular &&
+      row.caja_sesion_id &&
+      openSessionId &&
+      row.caja_sesion_id !== openSessionId
+  );
+
+  return {
+    id: row.id,
+    numero: row.numero,
+    cliente_id: row.cliente_id,
+    cliente_nombre: row.cliente_nombre,
+    usuario_id: row.usuario_id,
+    usuario_nombre: row.usuario_nombre,
+    subtotal: Number(row.subtotal),
+    descuento: Number(row.descuento),
+    total: Number(row.total),
+    metodo_pago: row.metodo_pago,
+    metodo_pago_nombre:
+      row.metodo_pago === MIXED_PAYMENT_CODE
+        ? 'Pago combinado'
+        : row.metodo_pago_nombre ?? row.metodo_pago,
+    monto_recibido: row.monto_recibido != null ? Number(row.monto_recibido) : null,
+    vuelto: row.vuelto != null ? Number(row.vuelto) : null,
+    caja_sesion_id: row.caja_sesion_id,
+    caja_sesion_estado: row.caja_sesion_estado ?? null,
+    estado: row.estado,
+    observaciones: row.observaciones,
+    fecha_venta: row.fecha_venta,
+    total_items: Number(row.total_items ?? 0),
+    comprobante_numero: row.comprobante_numero,
+    puede_anular,
+    anulacion_otro_turno,
+  };
+};
 
 const mapSaleDetail = (row) => {
   const cantidad = Number(row.cantidad);
@@ -454,31 +466,49 @@ export const listSales = async (query, usuarioId = null) => {
   };
 };
 
+/**
+ * Si la venta impactó caja, exige turno abierto del usuario.
+ * El reverso se asienta en esa sesión (actual), no en la original.
+ */
 const assertSaleCancellable = async (venta, usuarioId, conn) => {
   if (venta.estado === 'anulada') {
     throw new AppError('La venta ya está anulada', 400);
   }
 
-  if (!venta.caja_sesion_id) return;
+  if (venta.estado !== 'completada') {
+    throw new AppError('Solo se pueden anular ventas completadas', 400);
+  }
 
-  const [sessionRows] = await conn.execute(
-    'SELECT id, estado FROM caja_sesiones WHERE id = ? LIMIT 1',
-    [venta.caja_sesion_id]
-  );
+  if (!venta.caja_sesion_id) {
+    return { openSession: null, esOtroTurno: false };
+  }
 
-  if (!sessionRows.length || sessionRows[0].estado !== 'abierta') {
+  const openSession = await getOpenSessionForUser(usuarioId, conn);
+  if (!openSession) {
     throw new AppError(
-      'No puede anular ventas de un turno de caja cerrado. Solo se permiten anulaciones del turno actual.',
+      'Debe tener un turno de caja abierto para anular esta venta. El retiro o reverso se asienta en su turno actual.',
       400
     );
   }
 
-  const openSession = await getOpenSessionForUser(usuarioId, conn);
-  if (!openSession || openSession.id !== venta.caja_sesion_id) {
-    throw new AppError(
-      'Solo puede anular ventas registradas en su turno de caja abierto actualmente.',
-      400
-    );
+  return {
+    openSession,
+    esOtroTurno: openSession.id !== venta.caja_sesion_id,
+  };
+};
+
+const formatSaleDateShort = (fecha) => {
+  if (!fecha) return null;
+  try {
+    const d = fecha instanceof Date ? fecha : new Date(fecha);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toLocaleDateString('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+  } catch {
+    return null;
   }
 };
 
@@ -486,7 +516,11 @@ export const cancelSale = async (id, usuarioId, ip = null) => {
   return withTransaction(async (conn) => {
     const venta = await getSaleById(id, conn, usuarioId);
 
-    await assertSaleCancellable(venta, usuarioId, conn);
+    const { openSession, esOtroTurno } = await assertSaleCancellable(
+      venta,
+      usuarioId,
+      conn
+    );
 
     for (const line of venta.detalle) {
       await registerMovement(
@@ -503,6 +537,8 @@ export const cancelSale = async (id, usuarioId, ip = null) => {
     }
 
     const pagos = venta.pagos?.length ? venta.pagos : await fetchSalePayments(id, conn);
+    const sesionAnulacionId = openSession?.id ?? null;
+    const fechaVentaLabel = formatSaleDateShort(venta.fecha_venta);
 
     for (const pago of pagos) {
       const [pmRows] = await conn.execute(
@@ -512,14 +548,21 @@ export const cancelSale = async (id, usuarioId, ip = null) => {
       const pm = pmRows[0];
       const generaCc = pm ? Boolean(pm.genera_cargo_cc) : pago.metodo_pago === 'cuenta_corriente';
 
-      if (venta.caja_sesion_id && !generaCc) {
+      if (venta.caja_sesion_id && !generaCc && sesionAnulacionId) {
+        const descripcion = esOtroTurno
+          ? `Anulación ${venta.numero} (venta de otro turno${
+              fechaVentaLabel ? ` · ${fechaVentaLabel}` : ''
+            } · sesión #${venta.caja_sesion_id})`
+          : `Anulación ${venta.numero}`;
+
         await reverseSaleInCash(
           {
-            sesionId: venta.caja_sesion_id,
+            sesionId: sesionAnulacionId,
             ventaId: id,
             numero: venta.numero,
             monto: pago.monto,
             metodoPago: pago.metodo_pago,
+            descripcion,
           },
           usuarioId,
           conn
@@ -546,7 +589,14 @@ export const cancelSale = async (id, usuarioId, ip = null) => {
       usuarioId,
       accion: 'venta.anular',
       modulo: 'ventas',
-      detalle: { venta_id: id, numero: venta.numero },
+      detalle: {
+        venta_id: id,
+        numero: venta.numero,
+        sesion_origen_id: venta.caja_sesion_id ?? null,
+        sesion_anulacion_id: sesionAnulacionId,
+        es_otro_turno: esOtroTurno,
+        fecha_venta: venta.fecha_venta,
+      },
       ip,
     });
 
