@@ -50,8 +50,8 @@ export const registerMovement = async (data, usuarioId, connection = null) => {
     } else if (data.tipo === 'salida') {
       stockPosterior = stockAnterior - cantidadRegistro;
     } else if (data.tipo === 'ajuste') {
+      // cantidad = stock objetivo que indicó el usuario (no el delta)
       stockPosterior = cantidadRegistro;
-      cantidadRegistro = Math.abs(stockPosterior - stockAnterior);
     }
 
     const nuevoCosto =

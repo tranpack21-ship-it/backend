@@ -504,9 +504,15 @@ export const getComprasMercaderiaReport = async ({
   }
   const invWhere = invConds.join(' AND ');
 
-  // Unidades/valor: en entrada = cantidad; en ajuste alcista = stock_posterior - stock_anterior
+  // Unidades/valor:
+  // - entrada: cantidad ingresada
+  // - ajuste alcista: aumento desde stock no negativo (si venía en negativo,
+  //   se toma el stock final como unidades “puestas” a costo, no el delta contable)
   const unidadesExpr = `CASE
-    WHEN m.tipo = 'ajuste' THEN (m.stock_posterior - m.stock_anterior)
+    WHEN m.tipo = 'ajuste' THEN GREATEST(
+      m.stock_posterior - GREATEST(m.stock_anterior, 0),
+      0
+    )
     ELSE m.cantidad
   END`;
 
