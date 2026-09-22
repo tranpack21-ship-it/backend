@@ -8,6 +8,7 @@ export const createMovementSchema = z.object({
   tipo: z.enum(['entrada', 'salida', 'ajuste']),
   cantidad: cantidadSchema,
   motivo: z.string().min(3).max(255).trim(),
+  precio_costo: z.coerce.number().min(0, 'El costo no puede ser negativo').optional().nullable(),
 });
 
 export const stockAlertsQuerySchema = z.object({

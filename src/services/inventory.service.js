@@ -32,7 +32,7 @@ const baseSelect = `
 export const registerMovement = async (data, usuarioId, connection = null) => {
   const exec = async (conn) => {
     const [products] = await conn.execute(
-      "SELECT id, stock, nombre FROM productos WHERE id = ? AND estado = 'activo' LIMIT 1",
+      "SELECT id, stock, nombre, precio_costo FROM productos WHERE id = ? AND estado = 'activo' LIMIT 1",
       [data.producto_id]
     );
 
@@ -54,10 +54,26 @@ export const registerMovement = async (data, usuarioId, connection = null) => {
       cantidadRegistro = Math.abs(stockPosterior - stockAnterior);
     }
 
-    await conn.execute('UPDATE productos SET stock = ? WHERE id = ?', [
-      stockPosterior,
-      data.producto_id,
-    ]);
+    const nuevoCosto =
+      data.precio_costo !== undefined && data.precio_costo !== null && data.precio_costo !== ''
+        ? Number(data.precio_costo)
+        : null;
+
+    if (nuevoCosto != null) {
+      if (Number.isNaN(nuevoCosto) || nuevoCosto < 0) {
+        throw new AppError('Precio de costo inválido', 400);
+      }
+      await conn.execute('UPDATE productos SET stock = ?, precio_costo = ? WHERE id = ?', [
+        stockPosterior,
+        nuevoCosto,
+        data.producto_id,
+      ]);
+    } else {
+      await conn.execute('UPDATE productos SET stock = ? WHERE id = ?', [
+        stockPosterior,
+        data.producto_id,
+      ]);
+    }
 
     const [result] = await conn.execute(
       `INSERT INTO movimientos_inventario (
