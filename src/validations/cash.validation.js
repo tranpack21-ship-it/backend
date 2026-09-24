@@ -22,6 +22,10 @@ export const cashMovementSchema = z.object({
     .trim(),
 });
 
+export const updateCashMovementSchema = z.object({
+  metodo_pago: z.string().min(1, 'Indique el método de pago').max(50).trim(),
+});
+
 export const listCashSessionsSchema = withDateRangeRefine(
   z.object({
     page: z.coerce.number().int().min(1).optional().default(1),

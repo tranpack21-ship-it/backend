@@ -4,6 +4,7 @@ import { sqlLimitOffset } from '../utils/paginationSql.js';
 import { withTransaction } from '../utils/transaction.js';
 import { logAudit } from '../utils/audit.js';
 import { getActivePaymentMethodByCode } from './paymentMethod.service.js';
+import { fetchSalePayments, MIXED_PAYMENT_CODE } from '../utils/salePayments.js';
 
 const mapSession = (row) => ({
   id: row.id,
@@ -53,15 +54,46 @@ const mapMovement = (row) => ({
 const computeEfectivoFisico = (sesion) =>
   sesion.monto_apertura + sesion.total_ventas_efectivo;
 
+/** Flags del método (activo o no) para recalcular efectivo al editar. */
+const getPaymentMethodFlags = async (metodoPago, conn) => {
+  const code = String(metodoPago || '')
+    .trim()
+    .toLowerCase();
+  if (!code) {
+    return { requiere_monto_recibido: false, genera_cargo_cc: false };
+  }
+  const [rows] = await conn.execute(
+    `SELECT requiere_monto_recibido, genera_cargo_cc
+     FROM metodos_pago WHERE codigo = ? LIMIT 1`,
+    [code]
+  );
+  if (rows.length) {
+    return {
+      requiere_monto_recibido: Boolean(rows[0].requiere_monto_recibido),
+      genera_cargo_cc: Boolean(rows[0].genera_cargo_cc),
+    };
+  }
+  return {
+    requiere_monto_recibido: code === 'efectivo',
+    genera_cargo_cc: code === 'cuenta_corriente',
+  };
+};
+
 /** Solo métodos que suman al efectivo físico del cajón */
 const affectsPhysicalCash = async (metodoPago, conn) => {
-  try {
-    const pm = await getActivePaymentMethodByCode(metodoPago, conn);
-    return Boolean(pm.requiere_monto_recibido);
-  } catch {
-    return metodoPago === 'efectivo';
-  }
+  const flags = await getPaymentMethodFlags(metodoPago, conn);
+  return Boolean(flags.requiere_monto_recibido);
 };
+
+const EDITABLE_MOVEMENT_TYPES = new Set([
+  'venta',
+  'ingreso',
+  'egreso',
+  'cobro_cc',
+  'anulacion',
+]);
+
+const cashEffectSign = (tipo) => (tipo === 'egreso' || tipo === 'anulacion' ? -1 : 1);
 
 export const getOpenSessionForUser = async (usuarioId, connection = null) => {
   const conn = connection || pool;
@@ -473,6 +505,176 @@ export const addMovement = async (sesionId, data, usuarioId, ip = null) => {
     });
 
     return getSessionById(sesionId, conn);
+  });
+};
+
+/**
+ * Cambia el método de pago de un movimiento del turno abierto.
+ * Recalcula efectivo físico y sincroniza venta_pagos / cobro CC si aplica.
+ */
+export const updateMovementPaymentMethod = async (
+  sesionId,
+  movementId,
+  data,
+  usuarioId,
+  ip = null
+) => {
+  return withTransaction(async (conn) => {
+    const sesion = await getSessionById(sesionId, conn);
+    if (sesion.estado !== 'abierta') {
+      throw new AppError('No se puede editar movimientos de una caja cerrada', 400);
+    }
+
+    const [rows] = await conn.execute(
+      `SELECT * FROM caja_movimientos WHERE id = ? AND sesion_id = ? LIMIT 1`,
+      [movementId, sesionId]
+    );
+    if (!rows.length) {
+      throw new AppError('Movimiento de caja no encontrado', 404);
+    }
+
+    const mov = rows[0];
+    if (!EDITABLE_MOVEMENT_TYPES.has(mov.tipo)) {
+      throw new AppError('Este tipo de movimiento no se puede editar', 400);
+    }
+
+    const nuevoMetodo = String(data.metodo_pago || '')
+      .trim()
+      .toLowerCase();
+    if (!nuevoMetodo) {
+      throw new AppError('Indique el método de pago', 400);
+    }
+
+    const oldMetodo = mov.metodo_pago || 'efectivo';
+    if (oldMetodo === nuevoMetodo) {
+      const [mapped] = await conn.execute(
+        `SELECT m.*, u.nombre_usuario AS usuario_nombre, mp.nombre AS metodo_pago_nombre
+         FROM caja_movimientos m
+         INNER JOIN usuarios u ON u.id = m.usuario_id
+         LEFT JOIN metodos_pago mp ON mp.codigo = m.metodo_pago
+         WHERE m.id = ? LIMIT 1`,
+        [movementId]
+      );
+      return {
+        movimiento: mapMovement(mapped[0]),
+        sesion: await getSessionById(sesionId, conn),
+      };
+    }
+
+    const newPm = await getActivePaymentMethodByCode(nuevoMetodo, conn);
+    if (newPm.genera_cargo_cc) {
+      throw new AppError(
+        'No se puede cambiar a cuenta corriente desde un movimiento de caja. Anule y vuelva a registrar.',
+        400
+      );
+    }
+
+    const oldAffects = await affectsPhysicalCash(oldMetodo, conn);
+    const newAffects = Boolean(newPm.requiere_monto_recibido);
+    const sign = cashEffectSign(mov.tipo);
+    const monto = Number(mov.monto);
+
+    let efectivoDelta = 0;
+    if (oldAffects) efectivoDelta -= sign * monto;
+    if (newAffects) efectivoDelta += sign * monto;
+
+    await conn.execute(`UPDATE caja_movimientos SET metodo_pago = ? WHERE id = ?`, [
+      newPm.codigo,
+      movementId,
+    ]);
+
+    if (efectivoDelta !== 0) {
+      await conn.execute(
+        `UPDATE caja_sesiones
+         SET total_ventas_efectivo = total_ventas_efectivo + ?
+         WHERE id = ?`,
+        [efectivoDelta, sesionId]
+      );
+    }
+
+    // Venta: sincronizar la línea de pago correspondiente
+    if (mov.tipo === 'venta' && mov.venta_id) {
+      const [pagoRows] = await conn.execute(
+        `SELECT id FROM venta_pagos
+         WHERE venta_id = ? AND metodo_pago = ? AND ABS(monto - ?) < 0.001
+         ORDER BY orden ASC, id ASC
+         LIMIT 1`,
+        [mov.venta_id, oldMetodo, monto]
+      );
+
+      if (pagoRows.length) {
+        const montoRecibido = newPm.requiere_monto_recibido ? monto : null;
+        const vuelto = newPm.requiere_monto_recibido ? 0 : null;
+        await conn.execute(
+          `UPDATE venta_pagos
+           SET metodo_pago = ?, monto_recibido = ?, vuelto = ?
+           WHERE id = ?`,
+          [newPm.codigo, montoRecibido, vuelto, pagoRows[0].id]
+        );
+
+        const pagos = await fetchSalePayments(mov.venta_id, conn);
+        const unique = [...new Set(pagos.map((p) => p.metodo_pago))];
+        const summaryCode = unique.length === 1 ? unique[0] : MIXED_PAYMENT_CODE;
+
+        if (unique.length === 1) {
+          await conn.execute(
+            `UPDATE ventas
+             SET metodo_pago = ?, monto_recibido = ?, vuelto = ?
+             WHERE id = ?`,
+            [
+              summaryCode,
+              newPm.requiere_monto_recibido ? monto : null,
+              newPm.requiere_monto_recibido ? 0 : null,
+              mov.venta_id,
+            ]
+          );
+        } else {
+          await conn.execute(`UPDATE ventas SET metodo_pago = ? WHERE id = ?`, [
+            summaryCode,
+            mov.venta_id,
+          ]);
+        }
+      }
+    }
+
+    // Cobro CC: sincronizar método de cobro
+    if (mov.tipo === 'cobro_cc' && mov.cuenta_corriente_movimiento_id) {
+      await conn.execute(
+        `UPDATE cuenta_corriente_movimientos SET metodo_cobro = ? WHERE id = ?`,
+        [newPm.codigo, mov.cuenta_corriente_movimiento_id]
+      );
+    }
+
+    await logAudit({
+      usuarioId,
+      accion: 'caja.movimiento.editar_metodo',
+      modulo: 'caja',
+      detalle: {
+        sesion_id: sesionId,
+        movimiento_id: movementId,
+        tipo: mov.tipo,
+        monto,
+        metodo_anterior: oldMetodo,
+        metodo_nuevo: newPm.codigo,
+        venta_id: mov.venta_id ?? undefined,
+        efectivo_delta: efectivoDelta,
+      },
+      ip,
+    });
+
+    const [mapped] = await conn.execute(
+      `SELECT m.*, u.nombre_usuario AS usuario_nombre, mp.nombre AS metodo_pago_nombre
+       FROM caja_movimientos m
+       INNER JOIN usuarios u ON u.id = m.usuario_id
+       LEFT JOIN metodos_pago mp ON mp.codigo = m.metodo_pago
+       WHERE m.id = ? LIMIT 1`,
+      [movementId]
+    );
+
+    return {
+      movimiento: mapMovement(mapped[0]),
+      sesion: await getSessionById(sesionId, conn),
+    };
   });
 };
 

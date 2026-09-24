@@ -5,6 +5,7 @@ import {
   openCashSchema,
   closeCashSchema,
   cashMovementSchema,
+  updateCashMovementSchema,
   listCashSessionsSchema,
   listCashMovementsSchema,
 } from '../validations/cash.validation.js';
@@ -83,6 +84,13 @@ router.post(
   authorizePermission(PERMISSION_CODES.CAJA_MOVIMIENTO),
   validate(cashMovementSchema),
   cashController.addMovement
+);
+
+router.patch(
+  '/:id/movements/:movementId',
+  authorizePermission(PERMISSION_CODES.CAJA_MOVIMIENTO),
+  validate(updateCashMovementSchema),
+  cashController.updateMovement
 );
 
 router.patch(

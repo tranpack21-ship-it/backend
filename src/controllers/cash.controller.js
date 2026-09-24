@@ -78,3 +78,18 @@ export const addMovement = asyncHandler(async (req, res) => {
     data: { sesion },
   });
 });
+
+export const updateMovement = asyncHandler(async (req, res) => {
+  const result = await cashService.updateMovementPaymentMethod(
+    req.params.id,
+    req.params.movementId,
+    req.body,
+    req.user.id,
+    clientIp(req)
+  );
+  res.json({
+    success: true,
+    message: 'Método de pago actualizado',
+    data: result,
+  });
+});
